@@ -18,6 +18,10 @@ export async function runPendingMigrations() {
     direction: 'up',
     migrationsTable: 'pgmigrations',
     count: Infinity,
+    // This deployment inherited a database whose pgmigrations table includes
+    // migrations from the previous repository. Allow new forward migrations
+    // even when those historical files are not present in this repository.
+    checkOrder: false,
     log: (message) => logger.info({ migration: message }),
   });
 

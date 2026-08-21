@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL ??= 'postgresql://test:test@localhost:5432/test';
 process.env.REDIS_HOST ??= 'localhost';
-process.env.PUBLIC_BASE_URL = 'https://api.voice.zeacrm.com';
+process.env.PUBLIC_BASE_URL = 'https://api.zvoice.zeacrm.com';
 process.env.CREDENTIAL_ENCRYPTION_KEY ??= '0123456789abcdef0123456789abcdef';
 
 const { validateIncomingPlivoCall } = await import('../src/voice/plivo-answer.service.js');

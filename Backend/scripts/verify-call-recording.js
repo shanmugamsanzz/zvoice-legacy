@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL ??= 'postgresql://test:test@localhost:5432/test';
 process.env.REDIS_HOST ??= 'localhost';
-process.env.PUBLIC_BASE_URL = 'https://api.voice.zeacrm.com';
+process.env.PUBLIC_BASE_URL = 'https://api.zvoice.zeacrm.com';
 process.env.CREDENTIAL_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
 
 const { encryptCredential } = await import('../src/security/credential-crypto.js');
@@ -25,7 +25,7 @@ const baseCall = {
   auth_token_encrypted: encryptedToken,
   main_auth_id: 'main-id',
   main_auth_token_encrypted: encryptedMainToken,
-  recording_callback_url: 'https://api.voice.zeacrm.com/webhooks/plivo/recording',
+  recording_callback_url: 'https://api.zvoice.zeacrm.com/webhooks/plivo/recording',
 };
 
 const xml = buildPlivoStreamXml({ id: callId, providerCallId }, {

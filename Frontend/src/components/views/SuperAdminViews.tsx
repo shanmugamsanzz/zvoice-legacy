@@ -1895,9 +1895,9 @@ function PhoneNumbersView() {
   const [newAuthToken, setNewAuthToken] = useState('');
   const [newBaseUrl, setNewBaseUrl] = useState('https://api.plivo.com/v1');
   const [newApplicationId, setNewApplicationId] = useState('');
-  const [newAnswerUrl, setNewAnswerUrl] = useState('https://api.voice.zeacrm.com/webhooks/plivo/answer');
-  const [newHangupUrl, setNewHangupUrl] = useState('https://api.voice.zeacrm.com/webhooks/plivo/hangup');
-  const [newRecordingCallbackUrl, setNewRecordingCallbackUrl] = useState('https://api.voice.zeacrm.com/webhooks/plivo/recording');
+  const [newAnswerUrl, setNewAnswerUrl] = useState('https://api.zvoice.zeacrm.com/webhooks/plivo/answer');
+  const [newHangupUrl, setNewHangupUrl] = useState('https://api.zvoice.zeacrm.com/webhooks/plivo/hangup');
+  const [newRecordingCallbackUrl, setNewRecordingCallbackUrl] = useState('https://api.zvoice.zeacrm.com/webhooks/plivo/recording');
   const [provSuccess, setProvSuccess] = useState<string | null>(null);
   const [assignNumId, setAssignNumId] = useState('');
   const [assignCompanyId, setAssignCompanyId] = useState('');
@@ -1957,9 +1957,9 @@ function PhoneNumbersView() {
       setTelephonyProviders((current) => [created, ...current]);
       setNewProvName(''); setNewAuthId(''); setNewAuthToken(''); setNewApplicationId('');
       setNewBaseUrl('https://api.plivo.com/v1');
-      setNewAnswerUrl('https://api.voice.zeacrm.com/webhooks/plivo/answer');
-      setNewHangupUrl('https://api.voice.zeacrm.com/webhooks/plivo/hangup');
-      setNewRecordingCallbackUrl('https://api.voice.zeacrm.com/webhooks/plivo/recording');
+      setNewAnswerUrl('https://api.zvoice.zeacrm.com/webhooks/plivo/answer');
+      setNewHangupUrl('https://api.zvoice.zeacrm.com/webhooks/plivo/hangup');
+      setNewRecordingCallbackUrl('https://api.zvoice.zeacrm.com/webhooks/plivo/recording');
       setProvSuccess(`Telephony provider "${created.name}" added successfully.`);
       window.setTimeout(() => setProvSuccess(null), 3000);
     } catch (requestError) {

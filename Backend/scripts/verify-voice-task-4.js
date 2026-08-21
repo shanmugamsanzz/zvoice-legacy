@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL ??= 'postgresql://test:test@localhost:5432/test';
 process.env.REDIS_HOST ??= 'localhost';
-process.env.PUBLIC_BASE_URL = 'https://api.voice.zeacrm.com';
+process.env.PUBLIC_BASE_URL = 'https://api.zvoice.zeacrm.com';
 process.env.VOICE_MEDIA_TOKEN_TTL_SECONDS = '120';
 
 const { createVoiceCallSession } = await import('../src/voice/call-session-store.js');

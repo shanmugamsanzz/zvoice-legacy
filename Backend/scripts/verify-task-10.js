@@ -97,9 +97,9 @@ try {
     body: JSON.stringify({
       name: `Task 10 Plivo ${suffix}`, authId: plivoAuthId, authToken: plivoToken,
       baseUrl: process.env.PLIVO_API_BASE_URL, applicationId: `task10-${suffix}`,
-      answerUrl: 'https://api.voice.zeacrm.com/webhooks/plivo/answer',
-      hangupUrl: 'https://api.voice.zeacrm.com/webhooks/plivo/hangup',
-      recordingCallbackUrl: 'https://api.voice.zeacrm.com/webhooks/plivo/recording',
+      answerUrl: 'https://api.zvoice.zeacrm.com/webhooks/plivo/answer',
+      hangupUrl: 'https://api.zvoice.zeacrm.com/webhooks/plivo/hangup',
+      recordingCallbackUrl: 'https://api.zvoice.zeacrm.com/webhooks/plivo/recording',
     }) });
   accountId = (await account.json()).data.id;
   async function insertCall(companyValue, status, providerCallId) {

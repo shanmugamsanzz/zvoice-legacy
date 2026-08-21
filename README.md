@@ -29,9 +29,9 @@ UUIDs and are never accepted directly from an API caller.
 
 Configure the server reverse proxy as follows:
 
-- `https://api.voice.zeacrm.com` -> `http://127.0.0.1:1112`
+- `https://api.zvoice.zeacrm.com` -> `http://127.0.0.1:1112`
 - The frontend domain -> `http://127.0.0.1:5020`
-- `https://voice.zeacrm.com/webhook` must continue routing to the voice runtime
+- `https://zvoice.zeacrm.com/webhook` must continue routing to the voice runtime
   that returns Plivo XML; it is not a frontend route.
 
 `Backend/.env` is intentionally excluded from Git because it contains database,

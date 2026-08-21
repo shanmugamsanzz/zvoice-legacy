@@ -6,7 +6,7 @@ import { WebSocket } from 'ws';
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL ??= 'postgresql://test:test@localhost:5432/test';
 process.env.REDIS_HOST ??= 'localhost';
-process.env.PUBLIC_BASE_URL = 'https://api.voice.zeacrm.com';
+process.env.PUBLIC_BASE_URL = 'https://api.zvoice.zeacrm.com';
 
 const { createVoiceMediaToken, validateVoiceMediaToken } = await import('../src/voice/plivo-answer.service.js');
 const { ActiveCallSessionStore } = await import('../src/voice/call-session-store.js');

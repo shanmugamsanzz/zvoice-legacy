@@ -97,6 +97,21 @@ export class FramedAudioQueue {
     });
   }
 
+  takeAvailable({ generationId, maxDurationMs }) {
+    if (!Number.isFinite(maxDurationMs) || maxDurationMs <= 0) return [];
+    const frames = [];
+    let durationMs = 0;
+    while (this.#frames.length) {
+      const next = this.#frames[0];
+      if (generationId && next.generationId !== generationId) break;
+      if (frames.length && durationMs + next.durationMs > maxDurationMs) break;
+      frames.push(this.#shift());
+      durationMs += next.durationMs;
+      if (durationMs >= maxDurationMs) break;
+    }
+    return frames;
+  }
+
   #shift() {
     const frame = this.#frames.shift();
     this.#bytes -= frame.data.length;

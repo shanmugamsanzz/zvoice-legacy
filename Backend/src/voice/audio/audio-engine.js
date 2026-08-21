@@ -109,6 +109,14 @@ export class ProviderIndependentAudioEngine {
       queue: this.outputQueue,
       send: (frame) => this.mediaSession.sendAudio(frame.data),
       onError: options.onError,
+      onUnderrun: options.onUnderrun,
+      onPacket: options.onPacket,
+      preRollMs: options.preRollMs ?? env.VOICE_AUDIO_PRE_ROLL_MS,
+      preRollMaxWaitMs: options.preRollMaxWaitMs ?? env.VOICE_AUDIO_PRE_ROLL_MAX_WAIT_MS,
+      lowWaterMs: options.lowWaterMs ?? env.VOICE_AUDIO_LOW_WATER_MS,
+      deliveryLeadMs: options.deliveryLeadMs ?? env.VOICE_AUDIO_DELIVERY_LEAD_MS,
+      underrunThresholdMs: options.underrunThresholdMs ?? env.VOICE_AUDIO_UNDERRUN_THRESHOLD_MS,
+      packetDurationMs: options.packetDurationMs ?? env.VOICE_AUDIO_PACKET_MS,
       now: options.now,
       sleep: options.sleep,
     });
@@ -137,6 +145,7 @@ export class ProviderIndependentAudioEngine {
   beginOutputGeneration(generationId = randomUUID()) {
     this.outboundConverter.reset();
     this.outboundFrames.reset();
+    this.pacer.resetTimeline();
     this.outputGenerationId = generationId;
     return generationId;
   }
@@ -173,7 +182,9 @@ export class ProviderIndependentAudioEngine {
     this.outputGenerationId = null;
     this.outboundConverter.reset();
     this.outboundFrames.reset();
+    this.pacer.cancelGeneration(generationId);
     const removedFrames = generationId ? this.outputQueue.cancelGeneration(generationId) : this.outputQueue.clear();
+    this.pacer.resetTimeline();
     if (this.mediaSession.started && !this.mediaSession.closed) this.mediaSession.clearAudio(reason);
     return { generationId, removedFrames };
   }

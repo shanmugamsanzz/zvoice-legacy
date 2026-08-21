@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { WebSocket } from 'ws';
 
 process.env.NODE_ENV = 'test';
@@ -10,7 +10,7 @@ process.env.PUBLIC_BASE_URL = 'https://api.zvoice.zeacrm.com';
 
 const { createVoiceMediaToken, validateVoiceMediaToken } = await import('../src/voice/plivo-answer.service.js');
 const { ActiveCallSessionStore } = await import('../src/voice/call-session-store.js');
-const { attachPlivoMediaWebSocket } = await import('../src/voice/plivo-media.socket.js');
+const { attachPlivoMediaWebSocket, PlivoMediaSession } = await import('../src/voice/plivo-media.socket.js');
 
 const secret = 'voice-task-6-signing-secret-at-least-32-characters';
 const call = {
@@ -103,7 +103,8 @@ assert.equal((await dtmfReceived)[0].digit, '5');
 
 const outbound = [];
 client.on('message', (data) => outbound.push(JSON.parse(data.toString('utf8'))));
-mediaSession.sendAudio(Buffer.alloc(160, 0x7f));
+const delivery = await mediaSession.sendAudio(Buffer.alloc(160, 0x7f));
+assert.ok(delivery.durationMs >= 0);
 mediaSession.checkpoint('response-1');
 mediaSession.clearAudio('caller_barge_in');
 await new Promise((resolve) => setTimeout(resolve, 20));
@@ -129,4 +130,33 @@ response.destroy();
 
 await runtime.close();
 await new Promise((resolve) => httpServer.close(resolve));
+
+class FakeSocket extends EventEmitter {
+  constructor() {
+    super();
+    this.readyState = WebSocket.OPEN;
+    this.bufferedAmount = 0;
+  }
+  send(_message, callback) { setTimeout(() => callback(), 45); }
+  close(code, reason) { this.readyState = WebSocket.CLOSED; this.emit('close', code, Buffer.from(reason)); }
+}
+const socketWarnings = [];
+const diagnosticLogger = {
+  info() {}, error() {}, debug() {}, child() { return this; },
+  warn(details) { socketWarnings.push(details); },
+};
+const fakeSocket = new FakeSocket();
+const diagnosticSession = new PlivoMediaSession({ socket: fakeSocket, call, log: diagnosticLogger });
+diagnosticSession.started = true;
+diagnosticSession.streamId = 'diagnostic-stream';
+diagnosticSession.mediaFormat = { encoding: 'audio/x-mulaw', sampleRate: 8000 };
+const slowDelivery = await diagnosticSession.sendAudio(Buffer.alloc(640, 0x7f));
+assert.ok(slowDelivery.durationMs >= 40, 'slow WebSocket callback duration must be measured');
+assert.equal(socketWarnings.length, 1, 'slow WebSocket delivery must emit a warning');
+fakeSocket.bufferedAmount = 2_000_000;
+await assert.rejects(
+  diagnosticSession.sendAudio(Buffer.alloc(640, 0x7f)),
+  (error) => error.code === 'VOICE_MEDIA_BACKPRESSURE_EXCEEDED',
+);
+diagnosticSession.close();
 console.log(JSON.stringify({ success: true, task: 'Voice Task 6 - authenticated Plivo media WebSocket' }));

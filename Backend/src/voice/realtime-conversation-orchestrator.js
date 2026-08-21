@@ -17,6 +17,7 @@ import { LlmCircuitBreaker } from './providers/llm/streaming-runtime.js';
 import { welcomeAudioCache } from './welcome-audio-cache.service.js';
 import { tenantProviderHealth } from './provider-health.service.js';
 import { renderWelcomeTemplate, welcomeTemplateContext } from './welcome-template.service.js';
+import { interruptionDecision } from './interruption/interruption-policy.js';
 
 const closeIntent = /\b(?:bye|goodbye|hang\s*up|disconnect|end (?:the )?call|not interested|call me later|i(?:'m| am) busy)\b|(?:போதும்|அழைப்பை முடி|பிறகு அழைக்கவும்)/iu;
 
@@ -57,6 +58,8 @@ export class RealtimeConversationOrchestrator {
     this.closing = false;
     this.activeLlm = null;
     this.inactivityTimer = null;
+    this.bargeInTimer = null;
+    this.callerSpeechActive = false;
     this.listeners = [];
     this.runtimeMetrics = { knowledge: [], tools: [], latency: {} };
     this.llmCircuitBreaker = new LlmCircuitBreaker();
@@ -156,6 +159,14 @@ export class RealtimeConversationOrchestrator {
       runtimeProfile: this.runtimeProfile,
       mediaSession: this.mediaSession,
       onError: (error) => void this.#recover(error, 'audio_output'),
+      onUnderrun: (details) => {
+        this.runtimeMetrics.latency.audioUnderruns = Number(this.runtimeMetrics.latency.audioUnderruns ?? 0) + 1;
+        this.log.warn({ stage: 'audio.underrun', callId: this.call.id, ...details }, 'Agent audio queue underrun detected');
+      },
+      onPacket: (details) => {
+        this.runtimeMetrics.latency.audioPackets = Number(this.runtimeMetrics.latency.audioPackets ?? 0) + 1;
+        this.log.debug({ stage: 'audio.packet', callId: this.call.id, ...details }, 'Agent audio packet delivered');
+      },
     });
     this.unsubscribeStt = this.adapters.stt.onEvent((event) => (
       void this.#guard('stt_event', () => this.#handleSttEvent(event))
@@ -238,18 +249,25 @@ export class RealtimeConversationOrchestrator {
     if (event.type === 'speech_started') {
       this.#clearInactivity();
       if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
-        await this.#cancelActive('caller_barge_in');
+        this.#startBargeInConfirmation();
       }
       return;
     }
+    if (event.type === 'partial_transcript') {
+      await this.#considerTranscriptInterruption(event.text, false);
+      return;
+    }
     if (event.type === 'speech_ended') {
+      this.callerSpeechActive = false;
+      this.#clearBargeInTimer();
       try { this.adapters.stt.flush(); } catch (error) { this.log.debug({ err: error, callId: this.call.id }, 'STT flush was not required'); }
       return;
     }
     if (event.type !== 'final_transcript') return;
     this.#clearInactivity();
     if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
-      await this.#cancelActive('caller_final_transcript');
+      const interrupted = await this.#considerTranscriptInterruption(event.text, true);
+      if (!interrupted) return;
     }
     if (this.controller.state !== callStates.LISTENING || !event.text.trim()) return;
     const action = await this.controller.receiveFinalTranscript(event.text);
@@ -259,6 +277,63 @@ export class RealtimeConversationOrchestrator {
     }
     const epoch = ++this.epoch;
     void this.#guard('turn', () => this.#runTurn(event.text, action.history, epoch));
+  }
+
+  #interruptionOptions() {
+    const settings = this.runtimeProfile?.agent?.settings ?? {};
+    return {
+      confirmationMs: Number(settings.interruptionConfirmationMs ?? env.VOICE_BARGE_IN_CONFIRMATION_MS),
+      minimumWords: Number(settings.interruptionMinWords ?? env.VOICE_BARGE_IN_MIN_WORDS),
+      acknowledgements: Array.isArray(settings.interruptionAcknowledgements) ? settings.interruptionAcknowledgements : [],
+      explicitStopPhrases: Array.isArray(settings.interruptionStopPhrases) ? settings.interruptionStopPhrases : [],
+    };
+  }
+
+  #clearBargeInTimer() {
+    clearTimeout(this.bargeInTimer);
+    this.bargeInTimer = null;
+  }
+
+  #startBargeInConfirmation() {
+    this.callerSpeechActive = true;
+    if (this.bargeInTimer) return;
+    const { confirmationMs } = this.#interruptionOptions();
+    this.log.debug({
+      stage: 'conversation.barge_in_candidate', callId: this.call.id,
+      decision: 'waiting_for_sustained_speech', confirmationMs,
+    }, 'Caller speech detected while agent output is active');
+    this.bargeInTimer = setTimeout(() => void this.#guard('barge_in_confirmation', async () => {
+      this.bargeInTimer = null;
+      if (!this.callerSpeechActive || this.finalized
+        || ![callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) return;
+      this.log.info({
+        stage: 'conversation.barge_in_decision', callId: this.call.id,
+        decision: 'confirmed', reason: 'sustained_speech', confirmationMs,
+      }, 'Sustained caller speech confirmed interruption');
+      await this.#cancelActive('caller_barge_in_sustained');
+    }), confirmationMs);
+    this.bargeInTimer.unref?.();
+  }
+
+  async #considerTranscriptInterruption(text, final) {
+    if (![callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) return false;
+    const decision = interruptionDecision(text, this.#interruptionOptions());
+    this.log[decision.confirmed ? 'info' : 'debug']({
+      stage: 'conversation.barge_in_decision', callId: this.call.id,
+      decision: decision.confirmed ? 'confirmed' : 'ignored', reason: decision.reason,
+      wordCount: decision.wordCount, final,
+    }, decision.confirmed ? 'Caller transcript confirmed interruption' : 'Caller transcript did not confirm interruption');
+    if (!decision.confirmed) {
+      if (final || decision.acknowledgement) {
+        this.callerSpeechActive = false;
+        this.#clearBargeInTimer();
+      }
+      return false;
+    }
+    this.callerSpeechActive = false;
+    this.#clearBargeInTimer();
+    await this.#cancelActive(decision.explicitStop ? 'caller_barge_in_explicit_stop' : 'caller_barge_in_transcript');
+    return true;
   }
 
   async #knowledge(query) {
@@ -476,6 +551,8 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #cancelActive(reason = 'cancelled', transition = true) {
+    this.callerSpeechActive = false;
+    this.#clearBargeInTimer();
     this.epoch += 1;
     this.activeLlm?.cancel(reason);
     this.adapters?.llm?.cancel?.(reason);
@@ -587,6 +664,8 @@ export class RealtimeConversationOrchestrator {
     if (this.finalized) return;
     this.finalized = true;
     this.#clearInactivity();
+    this.callerSpeechActive = false;
+    this.#clearBargeInTimer();
     this.epoch += 1;
     this.activeLlm?.cancel(reason);
     this.adapters?.tts?.cancel?.(reason);

@@ -277,6 +277,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       ttsPrice1k: base.ttsPrice1k !== undefined ? base.ttsPrice1k : 0.015,
       ttsSimilarityBoost: base.ttsSimilarityBoost !== undefined ? base.ttsSimilarityBoost : 0.75,
       pronunciationGroups: base.pronunciationGroups || [],
+      interruptionConfirmationMs: base.interruptionConfirmationMs ?? 350,
+      interruptionMinWords: base.interruptionMinWords ?? 2,
+      interruptionAcknowledgements: base.interruptionAcknowledgements || [],
+      interruptionStopPhrases: base.interruptionStopPhrases || [],
       preCallProvider: base.preCallProvider || 'Select Provider',
       preCallPrompt: base.preCallPrompt || '',
       preCallApiActive: base.preCallApiActive !== undefined ? base.preCallApiActive : true,
@@ -1791,6 +1795,50 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                       className="w-full bg-white border border-slate-200 focus:border-pink-500 rounded-xl px-4 py-3 text-xs font-bold text-slate-800 outline-none transition"
                     />
                   </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
+              <div className="flex items-center space-x-2 text-[#ec4899] mb-5">
+                <Sliders className="w-5 h-5" />
+                <div>
+                  <h4 className="text-xs font-black uppercase tracking-wider">Speech Interruption</h4>
+                  <p className="mt-1 text-[10px] font-semibold normal-case tracking-normal text-slate-400">These values are stored per agent. Enter one phrase per line.</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase">Confirmation delay (ms)</label>
+                  <input type="number" min="50" max="2000" step="50" disabled={isReadOnly}
+                    value={agent.interruptionConfirmationMs ?? 350}
+                    onChange={(e) => setAgent({ ...agent, interruptionConfirmationMs: Number(e.target.value) || 350 })}
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-xs font-bold outline-none focus:border-pink-500" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase">Minimum meaningful words</label>
+                  <input type="number" min="1" max="10" step="1" disabled={isReadOnly}
+                    value={agent.interruptionMinWords ?? 2}
+                    onChange={(e) => setAgent({ ...agent, interruptionMinWords: Number(e.target.value) || 2 })}
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-xs font-bold outline-none focus:border-pink-500" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase">Immediate stop phrases</label>
+                  <textarea rows={6} disabled={isReadOnly}
+                    value={(agent.interruptionStopPhrases ?? []).join('\n')}
+                    onChange={(e) => setAgent({ ...agent, interruptionStopPhrases: e.target.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean) })}
+                    placeholder={'Enter phrases, one per line'}
+                    className="w-full resize-y rounded-xl border border-slate-200 px-4 py-3 text-xs font-semibold outline-none focus:border-pink-500" />
+                  <p className="mt-1.5 text-[10px] font-semibold text-slate-400">An exact transcript match interrupts immediately.</p>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1.5 uppercase">Acknowledgements to ignore</label>
+                  <textarea rows={6} disabled={isReadOnly}
+                    value={(agent.interruptionAcknowledgements ?? []).join('\n')}
+                    onChange={(e) => setAgent({ ...agent, interruptionAcknowledgements: e.target.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean) })}
+                    placeholder={'Enter phrases, one per line'}
+                    className="w-full resize-y rounded-xl border border-slate-200 px-4 py-3 text-xs font-semibold outline-none focus:border-pink-500" />
+                  <p className="mt-1.5 text-[10px] font-semibold text-slate-400">These phrases will not stop agent playback by themselves.</p>
                 </div>
               </div>
             </div>

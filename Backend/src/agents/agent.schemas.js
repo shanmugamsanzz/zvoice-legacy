@@ -1,5 +1,13 @@
 import { z } from 'zod';
 
+const interruptionPhraseList = z.array(z.string().trim().min(1).max(160)).max(100);
+const agentSettingsSchema = z.object({
+  interruptionConfirmationMs: z.number().int().min(50).max(2000).optional(),
+  interruptionMinWords: z.number().int().min(1).max(10).optional(),
+  interruptionAcknowledgements: interruptionPhraseList.optional(),
+  interruptionStopPhrases: interruptionPhraseList.optional(),
+}).catchall(z.unknown());
+
 const fields = {
   name: z.string().trim().min(1).max(160),
   description: z.string().trim().max(5000).nullable().optional(),
@@ -16,7 +24,7 @@ const fields = {
   interruptionSensitivity: z.number().min(0).max(1).default(0.3),
   silenceTimeoutMs: z.number().int().min(100).max(120000).default(600),
   inactivityTimeoutSeconds: z.number().int().min(1).max(3600).default(5),
-  settings: z.record(z.string(), z.unknown()).default({}),
+  settings: agentSettingsSchema.default({}),
 };
 export const createAgentSchema = z.object(fields);
 export const updateAgentSchema = z.object(fields).partial().refine((value) => Object.keys(value).length > 0, 'At least one field is required');

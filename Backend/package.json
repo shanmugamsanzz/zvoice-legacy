@@ -61,6 +61,7 @@
     "verify:voice-llm-streaming": "node scripts/verify-voice-llm-streaming.js",
     "verify:voice-tts": "node scripts/verify-voice-tts.js",
     "verify:voice-orchestrator": "node scripts/verify-voice-orchestrator.js",
+    "verify:voice-interruption": "node scripts/verify-voice-interruption.js",
     "verify:voice-persistence": "node scripts/verify-voice-persistence.js",
     "verify:voice-hardening": "node scripts/verify-voice-hardening.js",
     "verify:voice-live-calls": "node scripts/verify-voice-live-calls.js",

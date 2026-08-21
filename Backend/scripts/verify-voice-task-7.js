@@ -91,6 +91,15 @@ await engine.drainOutput();
 assert.equal(sent.length, 1);
 assert.equal(sent[0].length, 160, 'Plivo receives paced 20 ms mu-law frames');
 
+const sentBeforePacketTest = sent.length;
+const packetGenerationId = engine.beginOutputGeneration('response-packet');
+const packetAudio = encodeAudio(Int16Array.from({ length: 1280 }, (_, index) => Math.sin(index / 8) * 8000), inputFormat);
+assert.equal(await engine.enqueueSynthesized(packetAudio, packetGenerationId), true);
+await engine.flushSynthesized(packetGenerationId);
+await engine.drainOutput();
+assert.equal(sent.length, sentBeforePacketTest + 1);
+assert.equal(sent.at(-1).length, 640, 'four 20 ms frames are combined into one 80 ms Plivo packet');
+
 engine.beginOutputGeneration('response-2');
 engine.cancelStaleAudio('barge-in');
 assert.equal(clearCount, 1, 'barge-in clears already buffered Plivo audio');

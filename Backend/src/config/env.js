@@ -69,6 +69,18 @@ const envSchema = z.object({
   VOICE_AUDIO_FRAME_MS: z.coerce.number().int().min(10).max(100).default(20),
   VOICE_AUDIO_INPUT_MAX_BUFFER_MS: z.coerce.number().int().min(100).max(10000).default(1000),
   VOICE_AUDIO_OUTPUT_MAX_BUFFER_MS: z.coerce.number().int().min(100).max(10000).default(2000),
+  VOICE_AUDIO_PRE_ROLL_MS: z.coerce.number().int().min(0).max(2000).default(120),
+  VOICE_AUDIO_PRE_ROLL_MAX_WAIT_MS: z.coerce.number().int().min(0).max(2000).default(80),
+  VOICE_AUDIO_LOW_WATER_MS: z.coerce.number().int().min(0).max(2000).default(60),
+  VOICE_AUDIO_DELIVERY_LEAD_MS: z.coerce.number().int().min(0).max(2000).default(160),
+  VOICE_AUDIO_UNDERRUN_THRESHOLD_MS: z.coerce.number().int().min(0).max(1000).default(40),
+  VOICE_AUDIO_PACKET_MS: z.coerce.number().int().min(20).max(200).default(80),
+  VOICE_AUDIO_WEBSOCKET_WARN_MS: z.coerce.number().int().min(1).max(5000).default(40),
+  VOICE_AUDIO_WEBSOCKET_SEND_TIMEOUT_MS: z.coerce.number().int().min(50).max(30000).default(1000),
+  VOICE_AUDIO_WEBSOCKET_BUFFER_WARN_BYTES: z.coerce.number().int().min(1024).max(16_777_216).default(262144),
+  VOICE_AUDIO_WEBSOCKET_MAX_BUFFER_BYTES: z.coerce.number().int().min(1024).max(67_108_864).default(1048576),
+  VOICE_BARGE_IN_CONFIRMATION_MS: z.coerce.number().int().min(50).max(2000).default(350),
+  VOICE_BARGE_IN_MIN_WORDS: z.coerce.number().int().min(1).max(10).default(2),
   VOICE_WELCOME_CACHE_TTL_SECONDS: z.coerce.number().int().min(60).max(604800).default(86400),
   VOICE_WELCOME_CACHE_MAX_BYTES: z.coerce.number().int().min(1024).max(10485760).default(2097152),
   VOICE_WELCOME_CACHE_TIMEOUT_MS: z.coerce.number().int().min(5).max(1000).default(50),
@@ -155,6 +167,22 @@ if (parsed.data.RAG_CHUNK_OVERLAP_TOKENS >= parsed.data.RAG_CHUNK_SIZE_TOKENS) {
 
 if (parsed.data.VOICE_CALL_HEARTBEAT_INTERVAL_MS >= parsed.data.VOICE_CALL_OWNERSHIP_TTL_SECONDS * 1000) {
   throw new Error('Invalid environment configuration: VOICE_CALL_HEARTBEAT_INTERVAL_MS must be shorter than VOICE_CALL_OWNERSHIP_TTL_SECONDS');
+}
+
+if (parsed.data.VOICE_AUDIO_PRE_ROLL_MS > parsed.data.VOICE_AUDIO_OUTPUT_MAX_BUFFER_MS) {
+  throw new Error('Invalid environment configuration: VOICE_AUDIO_PRE_ROLL_MS cannot exceed VOICE_AUDIO_OUTPUT_MAX_BUFFER_MS');
+}
+
+if (parsed.data.VOICE_AUDIO_LOW_WATER_MS > parsed.data.VOICE_AUDIO_PRE_ROLL_MS) {
+  throw new Error('Invalid environment configuration: VOICE_AUDIO_LOW_WATER_MS cannot exceed VOICE_AUDIO_PRE_ROLL_MS');
+}
+
+if (parsed.data.VOICE_AUDIO_PACKET_MS % parsed.data.VOICE_AUDIO_FRAME_MS !== 0) {
+  throw new Error('Invalid environment configuration: VOICE_AUDIO_PACKET_MS must be a multiple of VOICE_AUDIO_FRAME_MS');
+}
+
+if (parsed.data.VOICE_AUDIO_WEBSOCKET_BUFFER_WARN_BYTES > parsed.data.VOICE_AUDIO_WEBSOCKET_MAX_BUFFER_BYTES) {
+  throw new Error('Invalid environment configuration: VOICE_AUDIO_WEBSOCKET_BUFFER_WARN_BYTES cannot exceed VOICE_AUDIO_WEBSOCKET_MAX_BUFFER_BYTES');
 }
 
 const frozenEmbeddingModel = 'intfloat/multilingual-e5-small';

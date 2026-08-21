@@ -142,6 +142,10 @@ export interface VoiceAgent {
   ttsPrice1k?: number;
   ttsSimilarityBoost?: number;
   pronunciationGroups?: string[];
+  interruptionConfirmationMs?: number;
+  interruptionMinWords?: number;
+  interruptionAcknowledgements?: string[];
+  interruptionStopPhrases?: string[];
   preCallProvider?: string;
   preCallPrompt?: string;
   preCallApiActive?: boolean;

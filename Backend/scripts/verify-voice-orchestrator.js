@@ -110,7 +110,11 @@ const profile = {
     id: 'agent-1', tenantId: 'tenant-1', workspaceId: 'workspace-1', name: 'Hospital Agent',
     description: 'Hospital receptionist', goal: 'Help callers', language: 'English (US)',
     prompt: 'Answer briefly.', welcomeMessage: 'Welcome to the hospital.', temperature: 0.2,
-    inactivityTimeoutSeconds: 30, settings: { silentMessage: 'Are you still there?', maxInactivityPrompts: 1 },
+    inactivityTimeoutSeconds: 30, settings: {
+      silentMessage: 'Are you still there?', maxInactivityPrompts: 1,
+      interruptionConfirmationMs: 350, interruptionMinWords: 2,
+      interruptionAcknowledgements: ['சரி'], interruptionStopPhrases: ['stop'],
+    },
   },
   providers: {
     stt: { providerId: 'stt-1', providerName: 'Sarvam', modelId: 'stt-m', modelKey: 'saaras' },
@@ -173,10 +177,14 @@ llm.wasCancelled = false;
 stt.publish({ type: 'final_transcript', text: 'slow request', language: 'en', isFinal: true });
 await waitFor(() => orchestrator.controller.state === 'thinking', 'Slow turn did not start');
 stt.publish({ type: 'speech_started' });
+stt.publish({ type: 'partial_transcript', text: 'சரி', language: 'ta', isFinal: false });
+await new Promise((resolve) => setTimeout(resolve, 400));
+assert.equal(orchestrator.controller.state, 'thinking', 'short acknowledgement must not interrupt active output');
+stt.publish({ type: 'speech_started' });
 await waitFor(() => orchestrator.controller.state === 'listening', 'Barge-in did not restore listening');
 assert.ok(llm.cancelled > 0);
 assert.ok(tts.cancelled > 0);
-assert.ok(audioEngine.cancelled.includes('caller_barge_in'));
+assert.ok(audioEngine.cancelled.includes('caller_barge_in_sustained'));
 
 llm.wasCancelled = false;
 stt.publish({ type: 'final_transcript', text: 'goodbye', language: 'en', isFinal: true });

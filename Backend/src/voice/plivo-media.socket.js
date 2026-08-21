@@ -15,6 +15,10 @@ const dtmfPattern = /^[0-9*#A-D]$/;
 
 function noOp() {}
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function rejectUpgrade(socket, statusCode, message) {
   if (!socket.writable) return socket.destroy();
   const body = JSON.stringify({ success: false, error: message });
@@ -58,6 +62,7 @@ export class PlivoMediaSession extends EventEmitter {
     this.lastSequence = -1;
     this.processing = Promise.resolve();
     this.pendingMessages = 0;
+    this.audioEpoch = 0;
     this.onClosed = options.onClosed ?? noOp;
     this.#bind();
   }
@@ -209,7 +214,57 @@ export class PlivoMediaSession extends EventEmitter {
     this.socket.send(JSON.stringify(message));
   }
 
-  sendAudio(audio, options = {}) {
+  async #sendAudioMessage(message, audioEpoch) {
+    const startedAt = performance.now();
+    while (this.socket.bufferedAmount > env.VOICE_AUDIO_WEBSOCKET_BUFFER_WARN_BYTES) {
+      if (this.socket.bufferedAmount > env.VOICE_AUDIO_WEBSOCKET_MAX_BUFFER_BYTES) {
+        throw new AppError(503, 'Plivo media WebSocket buffer exceeded its safe limit', 'VOICE_MEDIA_BACKPRESSURE_EXCEEDED', {
+          bufferedAmount: this.socket.bufferedAmount,
+        });
+      }
+      if (performance.now() - startedAt >= env.VOICE_AUDIO_WEBSOCKET_SEND_TIMEOUT_MS) {
+        throw new AppError(504, 'Timed out waiting for Plivo media WebSocket backpressure', 'VOICE_MEDIA_BACKPRESSURE_TIMEOUT', {
+          bufferedAmount: this.socket.bufferedAmount,
+        });
+      }
+      await wait(5);
+      if (this.closed || this.socket.readyState !== WebSocket.OPEN) {
+        throw new AppError(409, 'Plivo media WebSocket closed during backpressure wait', 'VOICE_MEDIA_SOCKET_CLOSED');
+      }
+    }
+
+    if (audioEpoch !== this.audioEpoch) return { cancelled: true };
+
+    const bufferedBefore = this.socket.bufferedAmount;
+    const serialized = JSON.stringify(message);
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (error) reject(new AppError(502, 'Failed to send audio to Plivo media WebSocket', 'VOICE_MEDIA_SEND_FAILED', {
+          providerMessage: error.message,
+        }));
+        else resolve();
+      };
+      const timer = setTimeout(() => finish(new Error('WebSocket send callback timed out')), env.VOICE_AUDIO_WEBSOCKET_SEND_TIMEOUT_MS);
+      timer.unref?.();
+      try { this.socket.send(serialized, finish); } catch (error) { finish(error); }
+    });
+    const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
+    const bufferedAfter = this.socket.bufferedAmount;
+    if (durationMs >= env.VOICE_AUDIO_WEBSOCKET_WARN_MS
+      || bufferedBefore >= env.VOICE_AUDIO_WEBSOCKET_BUFFER_WARN_BYTES) {
+      this.log.warn({
+        callId: this.callId, streamId: this.streamId, durationMs,
+        bufferedBefore, bufferedAfter, audioBytes: Buffer.byteLength(message.media.payload, 'base64'),
+      }, 'Slow or backpressured Plivo audio delivery');
+    }
+    return { durationMs, bufferedBefore, bufferedAfter };
+  }
+
+  async sendAudio(audio, options = {}) {
     this.#requireStarted('playAudio');
     const payload = Buffer.isBuffer(audio) ? audio.toString('base64') : String(audio ?? '');
     if (!validBase64(payload)) throw new TypeError('Synthesized audio must be a non-empty Buffer or base64 string');
@@ -218,7 +273,8 @@ export class PlivoMediaSession extends EventEmitter {
     if (contentType !== this.mediaFormat.encoding || sampleRate !== this.mediaFormat.sampleRate) {
       throw new AppError(409, 'Synthesized audio format must match the Plivo stream', 'VOICE_MEDIA_OUTPUT_FORMAT_MISMATCH');
     }
-    this.#send({ event: 'playAudio', media: { contentType, sampleRate, payload } });
+    const audioEpoch = this.audioEpoch;
+    return this.#sendAudioMessage({ event: 'playAudio', media: { contentType, sampleRate, payload } }, audioEpoch);
   }
 
   checkpoint(name) {
@@ -230,6 +286,7 @@ export class PlivoMediaSession extends EventEmitter {
 
   clearAudio(reason = 'interruption') {
     this.#requireStarted('clearAudio');
+    this.audioEpoch += 1;
     this.#send({ event: 'clearAudio', streamId: this.streamId });
     this.emit('interruption', { session: this, reason });
   }

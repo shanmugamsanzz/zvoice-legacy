@@ -43,6 +43,24 @@ function fallbackRecovery(profile) {
       : 'Sorry, I had a temporary problem. Could you please say that again?');
 }
 
+function answerSources(knowledge, { toolUsed = false } = {}) {
+  if (!knowledge?.found) {
+    return [{ type: toolUsed ? 'agent_tool' : 'model', label: toolUsed ? 'Agent tool result' : 'AI model (no Knowledge Base match)' }];
+  }
+  const candidates = knowledge.matches?.length ? knowledge.matches : [knowledge.source ?? {}];
+  return candidates.slice(0, 3).map((source) => ({
+    type: 'knowledge_base',
+    label: source.documentName ?? source.knowledgeBaseName ?? 'Knowledge Base',
+    route: knowledge.route,
+    recordId: source.id ?? source.recordId ?? null,
+    knowledgeBaseId: source.knowledgeBaseId ?? null,
+    knowledgeBaseName: source.knowledgeBaseName ?? null,
+    documentId: source.documentId ?? null,
+    documentName: source.documentName ?? null,
+    pageNumber: source.pageNumber ?? null,
+  }));
+}
+
 export class RealtimeConversationOrchestrator {
   constructor(mediaSession, dependencies = {}) {
     if (!mediaSession?.callId) throw new TypeError('A Plivo media session is required');
@@ -439,7 +457,9 @@ export class RealtimeConversationOrchestrator {
       response = { cancelled: false, text: String(knowledge.content).trim(), toolCalls: [] };
     }
     if (response.cancelled || epoch !== this.epoch) return;
+    let toolUsed = false;
     if (response.toolCalls.length) {
+      toolUsed = true;
       const toolResults = await (this.dependencies.executeTools ?? executeAgentTools)(
         this.runtimeProfile, this.call, response.toolCalls, { fetchImpl: this.dependencies.fetchImpl },
       );
@@ -454,7 +474,7 @@ export class RealtimeConversationOrchestrator {
     }
     if (response.cancelled || epoch !== this.epoch || this.finalized) return;
     const answer = response.text || String(this.runtimeProfile.agent.settings?.noResponseMessage ?? 'Sorry, I could not form a response.');
-    await this.controller.setAssistantResponse(answer);
+    await this.controller.setAssistantResponse(answer, Date.now(), answerSources(knowledge, { toolUsed }));
     await this.#synthesize(answer, `turn-${epoch}`, { kind: 'response', startedAt: turnStartedAt });
     if (epoch !== this.epoch || this.finalized || this.controller.state !== callStates.SPEAKING) return;
     await this.controller.playbackComplete();
@@ -582,7 +602,7 @@ export class RealtimeConversationOrchestrator {
     const action = await this.controller.handleSilence();
     if (action.action === 'close') return this.#close(action.reason);
     if (action.action !== 'inactivity_response') return;
-    await this.controller.setAssistantResponse(action.text);
+    await this.controller.setAssistantResponse(action.text, Date.now(), [{ type: 'agent_config', label: 'Agent inactivity message' }]);
     const epoch = ++this.epoch;
     await this.#synthesize(action.text, `silence-${epoch}`);
     if (epoch === this.epoch && this.controller.state === callStates.SPEAKING) {
@@ -615,7 +635,7 @@ export class RealtimeConversationOrchestrator {
     await this.controller.requestClose(reason);
     const message = await this.#closingMessage(reason);
     if (message && !this.mediaSession.closed) {
-      await this.controller.recordAssistantMessage(message);
+      await this.controller.recordAssistantMessage(message, Date.now(), [{ type: 'agent_config', label: 'Agent closing message' }]);
       try { await this.#synthesize(message, `closing-${this.epoch}`); } catch (error) {
         this.log.warn({ err: error, callId: this.call.id }, 'Dynamic closing audio failed');
       }
@@ -650,7 +670,7 @@ export class RealtimeConversationOrchestrator {
       try {
         const message = fallbackRecovery(this.runtimeProfile);
         await this.controller.beginSystemResponse('error_recovery');
-        await this.controller.setAssistantResponse(message);
+        await this.controller.setAssistantResponse(message, Date.now(), [{ type: 'agent_config', label: 'Agent recovery message' }]);
         await this.#synthesize(message, `recovery-${this.epoch}`);
         if (this.controller.state === callStates.SPEAKING) await this.controller.playbackComplete();
       } catch (recoveryError) {

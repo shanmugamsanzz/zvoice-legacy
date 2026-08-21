@@ -55,7 +55,7 @@ const runtimeProfileSql = `
       FROM voice_agents
      WHERE tenant_id = $1 AND id = $2 AND status = 'active' AND deleted_at IS NULL
   ), assigned AS (
-    SELECT kb.id, kb.publication_revision, akb.priority,
+    SELECT kb.id, kb.name, kb.publication_revision, akb.priority,
       EXISTS (
         SELECT 1 FROM knowledge_processing_jobs j
          WHERE j.tenant_id = kb.tenant_id AND j.knowledge_base_id = kb.id
@@ -77,12 +77,18 @@ const runtimeProfileSql = `
     (SELECT usage_direction FROM runtime_agent) AS agent_usage,
     COALESCE((SELECT jsonb_agg(jsonb_build_object(
       'id', id, 'publicationRevision', publication_revision,
-      'priority', priority, 'semanticReady', semantic_ready
+      'name', name, 'priority', priority, 'semanticReady', semantic_ready
     ) ORDER BY priority, id) FROM assigned), '[]'::jsonb) AS knowledge_bases,
+    COALESCE((SELECT jsonb_agg(jsonb_build_object(
+      'id', d.id, 'knowledgeBaseId', d.knowledge_base_id, 'displayName', d.display_name,
+      'originalFilename', d.original_filename
+    ) ORDER BY d.id) FROM knowledge_documents d JOIN assigned a ON a.id=d.knowledge_base_id
+      WHERE d.tenant_id=$1 AND d.deleted_at IS NULL AND d.status='ready'), '[]'::jsonb) AS documents,
     COALESCE((SELECT jsonb_agg(to_jsonb(r) ORDER BY r.priority, r.id)
       FROM (
-        SELECT w.id, w.knowledge_base_id, w.name, w.intent, w.priority,
-          w.action_type, w.action_config, w.response_template
+        SELECT w.id, w.knowledge_base_id, w.document_id, d.display_name AS document_name,
+          a.name AS knowledge_base_name, w.name, w.intent, w.priority,
+          w.action_type, w.action_config, w.response_template, w.source_page_start
           FROM workflow_rules w JOIN assigned a ON a.id = w.knowledge_base_id
           JOIN knowledge_document_versions v ON v.tenant_id=w.tenant_id AND v.id=w.document_version_id
           JOIN knowledge_documents d ON d.tenant_id=w.tenant_id AND d.id=w.document_id
@@ -93,8 +99,10 @@ const runtimeProfileSql = `
       ) r), '[]'::jsonb) AS workflows,
     COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.sequence_order, c.id)
       FROM (
-        SELECT f.id, f.knowledge_base_id, f.flow_key, f.node_key, f.node_type,
-          f.language, f.sequence_order, f.is_entry, f.content, f.variables, f.transitions
+        SELECT f.id, f.knowledge_base_id, f.document_id, d.display_name AS document_name,
+          a.name AS knowledge_base_name, f.flow_key, f.node_key, f.node_type,
+          f.language, f.sequence_order, f.is_entry, f.content, f.variables, f.transitions,
+          f.source_page_start
           FROM conversation_flows f JOIN assigned a ON a.id=f.knowledge_base_id
           JOIN knowledge_document_versions v ON v.tenant_id=f.tenant_id AND v.id=f.document_version_id
           JOIN knowledge_documents d ON d.tenant_id=f.tenant_id AND d.id=f.document_id
@@ -105,8 +113,9 @@ const runtimeProfileSql = `
       ) c), '[]'::jsonb) AS conversations,
     COALESCE((SELECT jsonb_agg(to_jsonb(i) ORDER BY i.display_order, i.id)
       FROM (
-        SELECT si.id, si.knowledge_base_id, si.item_key, si.name, si.description,
-          si.price, si.currency, si.display_order,
+        SELECT si.id, si.knowledge_base_id, si.document_id, d.display_name AS document_name,
+          a.name AS knowledge_base_name, si.item_key, si.name, si.description,
+          si.price, si.currency, si.display_order, si.source_page_start,
           COALESCE((SELECT jsonb_agg(jsonb_build_object(
             'key', sa.attribute_key, 'name', sa.display_name, 'value', sa.value
           ) ORDER BY sa.display_order, sa.id) FROM structured_item_attributes sa
@@ -121,7 +130,8 @@ const runtimeProfileSql = `
       ) i), '[]'::jsonb) AS catalog_items,
     COALESCE((SELECT jsonb_agg(to_jsonb(f) ORDER BY f.id)
       FROM (
-        SELECT fe.id, fe.knowledge_base_id, fe.question, fe.answer, fe.language
+        SELECT fe.id, fe.knowledge_base_id, fe.document_id, d.display_name AS document_name,
+          a.name AS knowledge_base_name, fe.question, fe.answer, fe.language, fe.source_page_start
           FROM faq_entries fe JOIN assigned a ON a.id=fe.knowledge_base_id
           JOIN knowledge_document_versions v ON v.tenant_id=fe.tenant_id AND v.id=fe.document_version_id
           JOIN knowledge_documents d ON d.tenant_id=fe.tenant_id AND d.id=fe.document_id
@@ -157,6 +167,10 @@ function routeResponse(route, record, content, extra = {}) {
     source: {
       recordId: record.id,
       knowledgeBaseId: record.knowledge_base_id,
+      knowledgeBaseName: record.knowledge_base_name ?? null,
+      documentId: record.document_id ?? null,
+      documentName: record.document_name ?? null,
+      pageNumber: record.source_page_start ?? null,
       ...extra,
     },
   };
@@ -247,7 +261,10 @@ async function semanticRoute(auth, profile, input, normalizedQuery, runtime) {
       && allowed.get(String(payload.knowledge_base_id).toLowerCase()) === payload.publication_revision
       && [input.usageDirection.toUpperCase(), 'BOTH'].includes(payload.agent_usage)
       && ['FAQ', 'KNOWLEDGE_CHUNK'].includes(payload.record_type);
-  }).map((match) => ({
+  }).map((match) => {
+    const document = profile.documents?.find((item) => item.id === match.payload.document_id);
+    const knowledgeBase = profile.knowledge_bases.find((item) => item.id === match.payload.knowledge_base_id);
+    return ({
     id: match.id,
     score: Number(match.score),
     content: match.payload.content,
@@ -256,8 +273,11 @@ async function semanticRoute(auth, profile, input, normalizedQuery, runtime) {
     recordType: match.payload.record_type,
     knowledgeBaseId: match.payload.knowledge_base_id,
     documentId: match.payload.document_id,
+    documentName: document?.displayName ?? document?.originalFilename ?? null,
+    knowledgeBaseName: knowledgeBase?.name ?? null,
     pageNumber: match.payload.page_number ?? null,
-  }));
+    });
+  });
   if (!matches.length) return null;
   const result = {
     route: 'semantic',
@@ -266,7 +286,9 @@ async function semanticRoute(auth, profile, input, normalizedQuery, runtime) {
     source: {
       recordId: matches[0].id,
       knowledgeBaseId: matches[0].knowledgeBaseId,
+      knowledgeBaseName: matches[0].knowledgeBaseName,
       documentId: matches[0].documentId,
+      documentName: matches[0].documentName,
       pageNumber: matches[0].pageNumber,
     },
     matches,

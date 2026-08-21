@@ -96,32 +96,41 @@ async function documentRow(client, auth, knowledgeBaseId, documentId) {
   return result.rows[0];
 }
 
-export function knowledgeDocumentObjectKey({ tenantId, knowledgeBaseId, documentId, versionNumber }) {
+export function knowledgeDocumentObjectKey({ tenantId, knowledgeBaseId, documentId, versionNumber, extension = '.pdf' }) {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   for (const [name, value] of Object.entries({ tenantId, knowledgeBaseId, documentId })) {
     if (!uuid.test(value)) throw new TypeError(`${name} must be a UUID`);
   }
   if (!Number.isInteger(versionNumber) || versionNumber < 1) throw new TypeError('versionNumber must be positive');
-  return `tenants/${tenantId}/knowledge-bases/${knowledgeBaseId}/documents/${documentId}/versions/${versionNumber}/source.pdf`;
+  if (!['.pdf', '.txt'].includes(extension)) throw new TypeError('extension must be .pdf or .txt');
+  return `tenants/${tenantId}/knowledge-bases/${knowledgeBaseId}/documents/${documentId}/versions/${versionNumber}/source${extension}`;
 }
 
-export function validatePdfFile(file) {
+export function validateKnowledgeFile(file) {
   if (!file?.buffer || !Buffer.isBuffer(file.buffer)) {
-    throw new AppError(400, 'A PDF file is required in the file field', 'PDF_FILE_REQUIRED');
+    throw new AppError(400, 'A PDF or TXT file is required in the file field', 'KNOWLEDGE_FILE_REQUIRED');
   }
-  if (file.mimetype?.toLowerCase() !== 'application/pdf') {
-    throw new AppError(400, 'Only application/pdf files are supported', 'PDF_TYPE_INVALID');
+  const extension = path.extname(file.originalname ?? '').toLowerCase();
+  const mimeType = file.mimetype?.toLowerCase();
+  const isPdf = extension === '.pdf' && mimeType === 'application/pdf';
+  const isText = extension === '.txt' && ['text/plain', 'application/octet-stream'].includes(mimeType);
+  if (!isPdf && !isText) {
+    throw new AppError(400, 'Only PDF and TXT files are supported', 'KNOWLEDGE_FILE_TYPE_INVALID');
   }
-  if (path.extname(file.originalname ?? '').toLowerCase() !== '.pdf') {
-    throw new AppError(400, 'The uploaded filename must end with .pdf', 'PDF_EXTENSION_INVALID');
+  const minimumBytes = isPdf ? 5 : 1;
+  if (file.size < minimumBytes || file.size > env.KNOWLEDGE_PDF_MAX_BYTES) {
+    throw new AppError(400, `File size must be between ${minimumBytes} and ${env.KNOWLEDGE_PDF_MAX_BYTES} bytes`, 'KNOWLEDGE_FILE_SIZE_INVALID');
   }
-  if (file.size < 5 || file.size > env.KNOWLEDGE_PDF_MAX_BYTES) {
-    throw new AppError(400, `PDF size must be between 5 and ${env.KNOWLEDGE_PDF_MAX_BYTES} bytes`, 'PDF_SIZE_INVALID');
-  }
-  if (file.buffer.subarray(0, 5).toString('ascii') !== '%PDF-') {
+  if (isPdf && file.buffer.subarray(0, 5).toString('ascii') !== '%PDF-') {
     throw new AppError(400, 'The uploaded file does not contain a valid PDF signature', 'PDF_SIGNATURE_INVALID');
   }
+  if (isText && (file.buffer.includes(0) || file.buffer.toString('utf8').includes('\uFFFD'))) {
+    throw new AppError(400, 'TXT files must contain valid UTF-8 text', 'TEXT_ENCODING_INVALID');
+  }
+  return { extension, mimeType: isPdf ? 'application/pdf' : 'text/plain' };
 }
+
+export const validatePdfFile = validateKnowledgeFile;
 
 export function listKnowledgeDocuments(auth, knowledgeBaseId, filters, contextRunner = withTenantContext) {
   return contextRunner(auth, async (client) => {
@@ -163,7 +172,7 @@ export async function uploadKnowledgeDocument(
   contextRunner = withTenantContext,
   queueAdapter = enqueueKnowledgeProcessingJob,
 ) {
-  validatePdfFile(file);
+  const fileDetails = validateKnowledgeFile(file);
   await contextRunner(auth, (client) => ensureKnowledgeBase(client, auth, knowledgeBaseId));
 
   const documentId = crypto.randomUUID();
@@ -173,7 +182,7 @@ export async function uploadKnowledgeDocument(
     tenantId: auth.tenantId,
     knowledgeBaseId,
     documentId,
-    versionNumber,
+    versionNumber, extension: fileDetails.extension,
   });
   const checksumSha256 = crypto.createHash('sha256').update(file.buffer).digest('hex');
   let uploaded = false;
@@ -184,7 +193,7 @@ export async function uploadKnowledgeDocument(
     storedObject = await storageAdapter.putObject({
       key: objectKey,
       body: file.buffer,
-      contentType: 'application/pdf',
+      contentType: fileDetails.mimeType,
       metadata: {
         tenant_id: auth.tenantId,
         knowledge_base_id: knowledgeBaseId,
@@ -197,15 +206,15 @@ export async function uploadKnowledgeDocument(
     saved = await contextRunner(auth, async (client) => {
       await ensureKnowledgeBase(client, auth, knowledgeBaseId);
       const inferredDisplayName = path.basename(file.originalname, path.extname(file.originalname)).trim();
-      const displayName = (input.displayName ?? inferredDisplayName) || 'PDF document';
+      const displayName = (input.displayName ?? inferredDisplayName) || 'Knowledge document';
       await client.query(
         `INSERT INTO knowledge_documents (
            id, tenant_id, knowledge_base_id, document_type, display_name,
            original_filename, mime_type, size_bytes, status, metadata, created_by, updated_by
-         ) VALUES ($1, $2, $3, $4, $5, $6, 'application/pdf', $7, 'queued', $8::jsonb, $9, $9)`,
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'queued', $9::jsonb, $10, $10)`,
         [
           documentId, auth.tenantId, knowledgeBaseId, input.documentType, displayName,
-          file.originalname.slice(0, 500), file.size, JSON.stringify(input.metadata), auth.userId,
+          file.originalname.slice(0, 500), fileDetails.mimeType, file.size, JSON.stringify(input.metadata), auth.userId,
         ],
       );
       await client.query(
@@ -363,7 +372,7 @@ export async function uploadKnowledgeDocumentVersion(
   contextRunner = withTenantContext,
   queueAdapter = enqueueKnowledgeProcessingJob,
 ) {
-  validatePdfFile(file);
+  const fileDetails = validateKnowledgeFile(file);
   if (!env.B2_BUCKET) throw new AppError(503, 'B2 storage is not configured', 'B2_NOT_CONFIGURED');
   const checksumSha256 = crypto.createHash('sha256').update(file.buffer).digest('hex');
   const reserved = await contextRunner(auth, async (client) => {
@@ -382,7 +391,7 @@ export async function uploadKnowledgeDocumentVersion(
       throw new AppError(409, 'Knowledge document is busy', 'KNOWLEDGE_DOCUMENT_BUSY');
     }
     if (document.rows[0].current_checksum === checksumSha256) {
-      throw new AppError(409, 'Uploaded PDF is identical to the current version', 'KNOWLEDGE_VERSION_UNCHANGED');
+      throw new AppError(409, 'Uploaded file is identical to the current version', 'KNOWLEDGE_VERSION_UNCHANGED');
     }
     const versionNumber = (await client.query(
       `SELECT COALESCE(max(version_number),0)::int + 1 AS next_version
@@ -391,7 +400,7 @@ export async function uploadKnowledgeDocumentVersion(
     )).rows[0].next_version;
     const versionId = crypto.randomUUID();
     const objectKey = knowledgeDocumentObjectKey({
-      tenantId: auth.tenantId, knowledgeBaseId, documentId, versionNumber,
+      tenantId: auth.tenantId, knowledgeBaseId, documentId, versionNumber, extension: fileDetails.extension,
     });
     await client.query(
       `INSERT INTO knowledge_document_versions (
@@ -413,7 +422,7 @@ export async function uploadKnowledgeDocumentVersion(
     storedObject = await storageAdapter.putObject({
       key: reserved.objectKey,
       body: file.buffer,
-      contentType: 'application/pdf',
+      contentType: fileDetails.mimeType,
       metadata: {
         tenant_id: auth.tenantId,
         knowledge_base_id: knowledgeBaseId,
@@ -427,7 +436,7 @@ export async function uploadKnowledgeDocumentVersion(
       'DELETE FROM knowledge_document_versions WHERE tenant_id=$1 AND id=$2 AND is_current=false',
       [auth.tenantId, reserved.versionId],
     )).catch(() => {});
-    throw new AppError(502, 'The replacement PDF could not be stored in Backblaze B2', 'B2_UPLOAD_FAILED');
+    throw new AppError(502, 'The replacement file could not be stored in Backblaze B2', 'B2_UPLOAD_FAILED');
   }
 
   let saved;
@@ -455,13 +464,13 @@ export async function uploadKnowledgeDocumentVersion(
       );
       const displayName = input.displayName ?? null;
       await client.query(
-        `UPDATE knowledge_documents SET status='queued', original_filename=$4, size_bytes=$5,
-            metadata=metadata || $6::jsonb, updated_by=$7,
-            display_name=COALESCE($8, display_name)
+        `UPDATE knowledge_documents SET status='queued', original_filename=$4, mime_type=$5, size_bytes=$6,
+            metadata=metadata || $7::jsonb, updated_by=$8,
+            display_name=COALESCE($9, display_name)
           WHERE tenant_id=$1 AND knowledge_base_id=$2 AND id=$3`,
         [
-          auth.tenantId, knowledgeBaseId, documentId, file.originalname.slice(0, 500), file.size,
-          JSON.stringify(input.metadata), auth.userId, displayName,
+          auth.tenantId, knowledgeBaseId, documentId, file.originalname.slice(0, 500), fileDetails.mimeType,
+          file.size, JSON.stringify(input.metadata), auth.userId, displayName,
         ],
       );
       const job = await client.query(

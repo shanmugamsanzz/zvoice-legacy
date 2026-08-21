@@ -25,7 +25,7 @@ interface CallItem {
 }
 
 interface CallDetail extends CallItem {
-  transcript: Array<{ id: string; sequenceNumber: number; speaker: 'agent' | 'user' | 'system'; text: string; offsetMs: number; isFinal: boolean; createdAt: string }>;
+  transcript: Array<{ id: string; sequenceNumber: number; speaker: 'agent' | 'user' | 'system'; text: string; offsetMs: number; isFinal: boolean; createdAt: string; answerSources: Array<{ type: string; label: string; knowledgeBaseName?: string | null; documentName?: string | null; pageNumber?: number | null }> }>;
 }
 
 interface CallList {
@@ -167,6 +167,7 @@ export function CallMonitoringView() {
                   <div key={line.id} className={`flex flex-col ${line.speaker === 'agent' ? 'items-start' : line.speaker === 'user' ? 'items-end' : 'items-center'}`}>
                     <span className="text-[9px] text-slate-400 font-bold mb-1 uppercase font-mono">{line.speaker} · {offsetTime(line.offsetMs)}{line.isFinal ? '' : ' · processing'}</span>
                     <div className={`p-3 rounded-xl max-w-md font-semibold ${line.speaker === 'agent' ? 'bg-slate-50 text-slate-800 rounded-tl-none' : line.speaker === 'user' ? 'bg-indigo-600 text-white rounded-tr-none shadow-sm' : 'bg-amber-50 text-amber-800'}`}>{line.text}</div>
+                    {line.speaker === 'agent' && <div className="mt-1 flex max-w-md flex-wrap gap-1">{(line.answerSources?.length ? line.answerSources : [{ type: 'model', label: 'Source unavailable (older transcript)' }]).map((source, index) => <span key={`${source.label}-${index}`} className="rounded-full border border-slate-200 bg-white px-2 py-1 text-[9px] font-bold text-slate-500" title={source.knowledgeBaseName ?? undefined}>Source: {source.documentName ?? source.label}{source.pageNumber ? ` · Page ${source.pageNumber}` : ''}</span>)}</div>}
                   </div>
                 )) : (
                   <div className="h-full flex flex-col items-center justify-center text-center text-slate-400"><Activity className="w-8 h-8 text-slate-300 animate-pulse mb-2" /><span className="text-xs font-bold uppercase">Waiting for transcript entries</span><span className="text-[10px] text-slate-300 mt-1">The call session is {selectedCall.status}.</span></div>

@@ -85,7 +85,8 @@ export function getCall(auth, callId) {
       AND ($2::uuid IS NULL OR c.tenant_id = $2)`, [callId, companyId]);
     if (!result.rowCount) throw new AppError(404, 'Call was not found', 'CALL_NOT_FOUND');
     const transcript = await client.query(`SELECT id, sequence_number AS "sequenceNumber", speaker,
-      text, offset_ms AS "offsetMs", is_final AS "isFinal", created_at AS "createdAt"
+      text, offset_ms AS "offsetMs", is_final AS "isFinal", answer_sources AS "answerSources",
+      created_at AS "createdAt"
       FROM call_transcript_entries WHERE call_session_id = $1 ORDER BY sequence_number`, [callId]);
     return mapCall({ ...result.rows[0], transcript: transcript.rows }, true);
   });
@@ -144,9 +145,10 @@ export function appendTranscriptEntry(input) {
     const call = await client.query('SELECT tenant_id FROM call_sessions WHERE id = $1', [input.callId]);
     if (!call.rowCount) throw new AppError(404, 'Call was not found', 'CALL_NOT_FOUND');
     const result = await client.query(`INSERT INTO call_transcript_entries
-      (call_session_id, tenant_id, sequence_number, speaker, text, offset_ms, is_final)
-      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`, [input.callId, call.rows[0].tenant_id,
-      input.sequenceNumber, input.speaker, input.text, input.offsetMs ?? 0, input.isFinal ?? true]);
+      (call_session_id, tenant_id, sequence_number, speaker, text, offset_ms, is_final, answer_sources)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) RETURNING *`, [input.callId, call.rows[0].tenant_id,
+      input.sequenceNumber, input.speaker, input.text, input.offsetMs ?? 0, input.isFinal ?? true,
+      JSON.stringify(input.answerSources ?? [])]);
     return result.rows[0];
   });
 }

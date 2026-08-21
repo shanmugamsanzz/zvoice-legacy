@@ -5,23 +5,24 @@ import { AppError } from '../middleware/errors.js';
 import { deleteB2Object, getB2Object, putB2Object } from '../rag/b2.client.js';
 import { processExtractedCategory } from './category-processors.js';
 import { extractPdfText } from './pdf-text-extractor.js';
+import { extractPlainText } from './plain-text-extractor.js';
 
 const defaultDependencies = {
-  extract: extractPdfText,
+  extract: (buffer, mimeType) => mimeType === 'text/plain' ? extractPlainText(buffer) : extractPdfText(buffer),
   storage: { getObject: getB2Object, putObject: putB2Object, deleteObject: deleteB2Object },
   contextRunner: withPlatformAdminContext,
 };
 
 function extractedTextKey(sourceKey) {
-  return sourceKey.endsWith('/source.pdf')
-    ? sourceKey.slice(0, -'/source.pdf'.length) + '/extracted-text.json'
+  return /\/source\.(?:pdf|txt)$/u.test(sourceKey)
+    ? sourceKey.replace(/\/source\.(?:pdf|txt)$/u, '/extracted-text.json')
     : `${sourceKey}.extracted-text.json`;
 }
 
 async function claimJob(jobId, contextRunner) {
   return contextRunner(null, async (client) => {
     const result = await client.query(
-      `SELECT j.*, d.document_type, d.status AS document_status,
+      `SELECT j.*, d.document_type, d.mime_type, d.status AS document_status,
           v.b2_bucket, v.b2_object_key, v.content_sha256, v.status AS version_status
          FROM knowledge_processing_jobs j
          JOIN knowledge_documents d
@@ -204,7 +205,7 @@ async function completeJob(job, extraction, category, storedText, contextRunner)
     await persistenceByType[job.document_type](client, job, category);
 
     const extractionMetadata = {
-      extractor: 'pdfjs-dist',
+      extractor: job.mime_type === 'text/plain' ? 'utf8-plain-text' : 'pdfjs-dist',
       textOnly: true,
       ocrEnabled: false,
       characterCount: extraction.characterCount,
@@ -279,8 +280,8 @@ async function completeJob(job, extraction, category, storedText, contextRunner)
 }
 
 async function failJob(job, error, contextRunner) {
-  const code = error instanceof AppError ? error.code : 'PDF_PROCESSING_FAILED';
-  const message = String(error.message ?? 'PDF processing failed').slice(0, 4000);
+  const code = error instanceof AppError ? error.code : 'KNOWLEDGE_PROCESSING_FAILED';
+  const message = String(error.message ?? 'Knowledge document processing failed').slice(0, 4000);
   await contextRunner(null, async (client) => {
     await client.query(
       `UPDATE knowledge_processing_jobs
@@ -323,10 +324,10 @@ export async function processKnowledgeJob(jobId, dependencies = defaultDependenc
     });
     const checksum = crypto.createHash('sha256').update(source.body).digest('hex');
     if (checksum !== job.content_sha256) {
-      throw new AppError(422, 'Stored PDF checksum does not match its database version', 'PDF_CHECKSUM_MISMATCH');
+      throw new AppError(422, 'Stored file checksum does not match its database version', 'KNOWLEDGE_CHECKSUM_MISMATCH');
     }
     await updateProgress(jobId, 25, runtime.contextRunner);
-    const extraction = await runtime.extract(source.body);
+    const extraction = await runtime.extract(source.body, job.mime_type);
     await updateProgress(jobId, 60, runtime.contextRunner);
     const category = processExtractedCategory(job.document_type, extraction);
     const key = extractedTextKey(job.b2_object_key);

@@ -172,6 +172,8 @@ assert.equal(knowledgeAuth[0].workspaceId, 'workspace-1');
 assert.equal(toolInvocations[0].name, 'book_visit');
 assert.ok(tts.texts.includes('Your appointment is booked.'));
 assert.deepEqual(transcript.map((entry) => entry.speaker), ['agent', 'user', 'agent']);
+assert.ok(transcript.filter((entry) => entry.speaker === 'agent').every((entry) => entry.answerSources.length > 0));
+assert.equal(transcript.find((entry) => entry.text === 'Your appointment is booked.').answerSources[0].type, 'knowledge_base');
 
 llm.wasCancelled = false;
 stt.publish({ type: 'final_transcript', text: 'slow request', language: 'en', isFinal: true });

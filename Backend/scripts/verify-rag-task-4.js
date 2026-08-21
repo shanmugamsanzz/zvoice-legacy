@@ -13,8 +13,10 @@ import {
   knowledgeDocumentObjectKey,
   listKnowledgeDocuments,
   uploadKnowledgeDocument,
+  validateKnowledgeFile,
   validatePdfFile,
 } from '../src/knowledge-bases/knowledge-document.service.js';
+import { extractPlainText } from '../src/knowledge-bases/plain-text-extractor.js';
 
 const { Client } = pg;
 
@@ -41,8 +43,17 @@ function verifyValidationAndRouting() {
     size: 14,
   };
   validatePdfFile(validFile);
-  assert.throws(() => validatePdfFile({ ...validFile, mimetype: 'image/png' }), /Only application\/pdf/);
+  assert.throws(() => validatePdfFile({ ...validFile, mimetype: 'image/png' }), /Only PDF and TXT/);
   assert.throws(() => validatePdfFile({ ...validFile, buffer: Buffer.from('not-a-pdf-file') }), /valid PDF signature/);
+
+  const textFile = {
+    originalname: 'hospital.txt',
+    mimetype: 'text/plain',
+    buffer: Buffer.from('Silver package\nPrice: 1000'),
+    size: 26,
+  };
+  assert.deepEqual(validateKnowledgeFile(textFile), { extension: '.txt', mimeType: 'text/plain' });
+  assert.throws(() => validateKnowledgeFile({ ...textFile, originalname: 'hospital.doc' }), /Only PDF and TXT/);
 
   const tenantA = '3a76a9bb-3206-4b86-b7f5-4960c834e1e6';
   const tenantB = '1222ad4a-98db-4aa6-ae44-922489705e4b';
@@ -52,6 +63,9 @@ function verifyValidationAndRouting() {
   const keyB = knowledgeDocumentObjectKey({ tenantId: tenantB, knowledgeBaseId, documentId, versionNumber: 1 });
   assert.notEqual(keyA, keyB);
   assert.ok(keyA.startsWith(`tenants/${tenantA}/knowledge-bases/${knowledgeBaseId}/`));
+  assert.match(knowledgeDocumentObjectKey({
+    tenantId: tenantA, knowledgeBaseId, documentId, versionNumber: 1, extension: '.txt',
+  }), /\/source\.txt$/);
   assert.throws(() => knowledgeDocumentObjectKey({
     tenantId: '../shared', knowledgeBaseId, documentId, versionNumber: 1,
   }), /tenantId must be a UUID/);
@@ -69,6 +83,14 @@ function verifyValidationAndRouting() {
     assert.ok(routes.includes(requiredRoute), `Missing Task 4 route: ${requiredRoute}`);
   }
   return validFile;
+}
+
+async function verifyPlainTextExtraction() {
+  const extracted = await extractPlainText(Buffer.from('Silver package\r\nPrice: 1000'));
+  assert.equal(extracted.pageCount, 1);
+  assert.equal(extracted.pages[0].lines.length, 2);
+  assert.match(extracted.fullText, /Price: 1000/);
+  await assert.rejects(() => extractPlainText(Buffer.from('   ')), /does not contain any text/);
 }
 
 async function insertTenant(client, label) {
@@ -242,14 +264,16 @@ async function verifyLivePersistence(validFile) {
 }
 
 const validFile = verifyValidationAndRouting();
+await verifyPlainTextExtraction();
 await verifyLivePersistence(validFile);
 
 console.log(JSON.stringify({
   ok: true,
-  task: 'RAG Task 4 - Five-category PDF upload and B2 storage',
+  task: 'RAG Task 4 - Five-category PDF/TXT upload and B2 storage',
   verified: {
     documentCategories: KNOWLEDGE_DOCUMENT_TYPES.length,
     pdfValidation: true,
+    textValidationAndExtraction: true,
     tenantSafeObjectKeys: true,
     multipartRoutes: 3,
     b2FailureCompensation: true,

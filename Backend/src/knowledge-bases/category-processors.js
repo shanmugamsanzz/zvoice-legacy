@@ -22,7 +22,8 @@ function parseFaq(extraction) {
   };
   for (const line of lines) {
     const explicitQuestion = line.text.match(/^(?:q|question)\s*[:.)-]\s*(.+)$/i);
-    const isQuestion = explicitQuestion || line.text.endsWith('?');
+    const explicitAnswer = line.text.match(/^(?:a|answer)\s*[:.)-]\s*(.*)$/i);
+    const isQuestion = explicitQuestion || (!explicitAnswer && line.text.endsWith('?'));
     if (isQuestion) {
       flush();
       current = {
@@ -34,7 +35,7 @@ function parseFaq(extraction) {
       continue;
     }
     if (current) {
-      current.answer.push(line.text.replace(/^(?:a|answer)\s*[:.)-]\s*/i, ''));
+      current.answer.push(explicitAnswer?.[1] ?? line.text);
       current.lastPageNumber = line.pageNumber;
     }
   }
@@ -49,7 +50,7 @@ function priceFromLine(text) {
   if (!Number.isFinite(numeric)) return null;
   const token = (match[0].match(/₹|rs\.?|inr|\$|usd/i)?.[0] ?? 'INR').toLowerCase();
   const currency = token === '$' || token === 'usd' ? 'USD' : 'INR';
-  const name = text.replace(match[0], '').replace(/[-–—:|]+$/u, '').trim();
+  const name = text.replace(match[0], '').trim().replace(/[-–—:|]+$/u, '').trim();
   return { price: numeric, currency, name };
 }
 

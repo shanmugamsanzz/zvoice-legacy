@@ -1,0 +1,18 @@
+Vanakkam! Naan Shanmuga Hospital-la irundhu pesura AI voice agent Karthika. Ungalukku eppadi help pannalam?
+Neenga Facebook-la Master Health Check-up advertisement form fill panniyirundheenga. Adhula share panna enquiry-ku package details explain panna thaan call pannirukkom. Available packages-ai short-ah explain pannalama?
+Master Health Check-up-la Silver, Gold, Platinum packages irukku. Adhoda Diabetes, Renal or Kidney, Liver, Cardiac, Lungs, Ortho, Gastro, Oncology and Kids health packages-um irukku. Endha package pathi explain pannattum?
+Sari. Neenga select panna package-oda approved price, included tests, doctor consultation and preparation details-ai explain pannuren.
+Indha package-ku appointment book pannalama, illa vera package details explain pannattuma?
+Sari, appointment booking start pannalam. Appointment yaarukkaga book pannanum?
+Patient-oda full name sollunga.
+Patient-oda age sollunga.
+Appointment-ku preferred date enna?
+Preferred time enna?
+Endha package-ku appointment book pannanum?
+Neenga select panna package-oda approved fasting and preparation instructions-ai ippo explain pannuren.
+Booking details-ai confirm pannuren: patient name, age, preferred date, preferred time and selected package. Indha details ellam correct-ah?
+Unga confirmation kidaichirukku. Ippo booking request-ai submit pannuren; konjam wait pannunga.
+Booking tool successful-ah confirm pannina piragu mattum appointment booked-nu confirm pannuren.
+Unga appointment request successful-ah book aagiduchu. Booking tool return panna confirmation details idho.
+Vera edhavadhu kelvi irukka, illa vera package details venuma?
+Ungalukku help pannadhula sandhosham. Shanmuga Hospital-ai contact pannadhukku nandri. Vanakkam.

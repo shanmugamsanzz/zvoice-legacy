@@ -1,0 +1,34 @@
+Silver Master Health Check-up Package - INR 1650
+Gold Master Health Check-up Package - INR 4950
+Platinum Master Health Check-up Package - INR 7980
+
+Diabetes Health Check-up Package - INR 3200
+Renal Kidney Health Package - INR 1400
+Liver Health Check-up Package - INR 1400
+Cardiac Health Check-up Package - INR 2950
+Lungs Health Check-up Package - INR 999
+Orthopaedic Ortho Health Check-up Package - INR 1499
+Gastro Health Check-up Package with One-day Admission - INR 25000
+
+Onco Care Screening Premium Male Package - INR 8600
+Onco Care Screening Premium Female Package - INR 8800
+Male Oncology Add-on for Silver Gold or Platinum Package - INR 750
+Female Oncology Add-on for Silver Gold or Platinum Package - INR 1100
+
+Silver Package with Male Oncology Add-on Total - INR 2400
+Gold Package with Male Oncology Add-on Total - INR 5700
+Platinum Package with Male Oncology Add-on Total - INR 8730
+Silver Package with Female Oncology Add-on Total - INR 2750
+Gold Package with Female Oncology Add-on Total - INR 6050
+Platinum Package with Female Oncology Add-on Total - INR 9080
+
+Paediatric Health Screening - INR 1500
+Developmental Screening for Preterm Children or Children with Developmental Delay - INR 450
+IQ Assessment for Children Age 5 to 13 - INR 1500
+IQ Assessment for Children Above Age 13 - INR 2000
+Behavioural Assessment - INR 500
+Screening for Developmental Disorder - INR 500
+
+Neonatal Health Screening 3 Panel TSH 17-OHP and G6PD - INR 800
+Neonatal Health Screening 4 Panel TSH 17-OHP G6PD and Galactose - INR 1000
+Newborn Hearing Screening - INR 1200

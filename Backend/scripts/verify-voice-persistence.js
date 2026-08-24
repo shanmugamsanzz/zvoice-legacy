@@ -92,7 +92,10 @@ const toolResult = await executeAgentTool(runtimeProfile, call, {
 });
 assert.equal(toolResult.success, true);
 assert.equal(toolRequest.request.headers.authorization, 'Bearer secret');
-assert.equal(JSON.parse(toolRequest.request.body).context.tenantId, 'tenant-a');
+const toolRequestBody = JSON.parse(toolRequest.request.body);
+assert.deepEqual(toolRequestBody.input, { date: 'tomorrow' });
+assert.deepEqual(toolRequestBody.arguments, toolRequestBody.input);
+assert.equal(toolRequestBody.context.tenantId, 'tenant-a');
 let unassignedNetworkCalled = false;
 await assert.rejects(
   executeAgentTool(runtimeProfile, call, { name: 'delete_everything', arguments: {} }, {

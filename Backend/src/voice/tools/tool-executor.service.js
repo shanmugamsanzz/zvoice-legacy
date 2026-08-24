@@ -48,12 +48,14 @@ export async function executeAgentTool(runtimeProfile, call, toolCall, dependenc
   const config = configuration(tool);
   const fetchImpl = dependencies.fetchImpl ?? fetch;
   const timeoutMs = dependencies.timeoutMs ?? env.VOICE_TOOL_TIMEOUT_MS;
+  const input = toolCall.arguments ?? {};
   const response = await fetchImpl(config.url, {
     method: config.method,
     headers: config.headers,
     signal: AbortSignal.timeout(timeoutMs),
     body: JSON.stringify({
-      arguments: toolCall.arguments ?? {},
+      input,
+      arguments: input,
       context: {
         callId: call.id,
         providerCallId: call.providerCallId,

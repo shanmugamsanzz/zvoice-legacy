@@ -103,6 +103,11 @@ assert.equal(sent.at(-1).length, 640, 'four 20 ms frames are combined into one 8
 engine.beginOutputGeneration('response-2');
 engine.cancelStaleAudio('barge-in');
 assert.equal(clearCount, 1, 'barge-in clears already buffered Plivo audio');
+
+mediaSession.clearAudio = () => {
+  throw Object.assign(new Error('socket closed during clear'), { code: 'VOICE_MEDIA_SOCKET_CLOSED' });
+};
+assert.doesNotThrow(() => engine.cancelStaleAudio('socket-closed-race'));
 await engine.close();
 
 console.log('Voice task 7 verification passed: dynamic DSP, mono PCM, resampling, backpressure, pacing and cancellation are working.');

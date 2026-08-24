@@ -185,7 +185,13 @@ export class ProviderIndependentAudioEngine {
     this.pacer.cancelGeneration(generationId);
     const removedFrames = generationId ? this.outputQueue.cancelGeneration(generationId) : this.outputQueue.clear();
     this.pacer.resetTimeline();
-    if (this.mediaSession.started && !this.mediaSession.closed) this.mediaSession.clearAudio(reason);
+    if (this.mediaSession.started && !this.mediaSession.closed) {
+      try {
+        this.mediaSession.clearAudio(reason);
+      } catch (error) {
+        if (error?.code !== 'VOICE_MEDIA_SOCKET_CLOSED') throw error;
+      }
+    }
     return { generationId, removedFrames };
   }
 

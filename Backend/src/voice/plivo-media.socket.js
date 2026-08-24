@@ -207,11 +207,19 @@ export class PlivoMediaSession extends EventEmitter {
     this.close(1000, 'Plivo stream stopped');
   }
 
-  #send(message) {
+  #send(message, options = {}) {
     if (this.closed || this.socket.readyState !== WebSocket.OPEN) {
+      if (options.ignoreClosed === true) return false;
       throw new AppError(409, 'Plivo media WebSocket is not open', 'VOICE_MEDIA_SOCKET_CLOSED');
     }
-    this.socket.send(JSON.stringify(message));
+    try {
+      this.socket.send(JSON.stringify(message));
+      return true;
+    } catch (error) {
+      if (options.ignoreClosed === true
+        && (this.closed || this.socket.readyState !== WebSocket.OPEN)) return false;
+      throw error;
+    }
   }
 
   async #sendAudioMessage(message, audioEpoch) {
@@ -287,8 +295,10 @@ export class PlivoMediaSession extends EventEmitter {
   clearAudio(reason = 'interruption') {
     this.#requireStarted('clearAudio');
     this.audioEpoch += 1;
-    this.#send({ event: 'clearAudio', streamId: this.streamId });
+    const sent = this.#send({ event: 'clearAudio', streamId: this.streamId }, { ignoreClosed: true });
+    if (!sent) return false;
     this.emit('interruption', { session: this, reason });
+    return true;
   }
 
   sendDtmf(digits) {

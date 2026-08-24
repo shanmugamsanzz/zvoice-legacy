@@ -98,7 +98,7 @@ export class RealtimeConversationOrchestrator {
     bind('media', ({ audio }) => void this.#guard('media', () => this.#onMedia(audio)));
     bind('dtmf', ({ digit }) => void this.#guard('dtmf', () => this.#onDtmf(digit)));
     bind('stop', () => void this.#finalize('completed', 'plivo_stream_stopped'));
-    bind('failure', ({ error }) => void this.#recover(error, 'plivo_media'));
+    bind('failure', ({ error }) => void this.#guard('plivo_media', async () => { throw error; }));
     bind('closed', ({ code, reason }) => void this.#finalize(
       code === 1000 ? 'completed' : 'failed', reason || 'media_closed',
     ));
@@ -176,7 +176,7 @@ export class RealtimeConversationOrchestrator {
     this.audioEngine = (this.dependencies.createAudioEngine ?? ((options) => new ProviderIndependentAudioEngine(options)))({
       runtimeProfile: this.runtimeProfile,
       mediaSession: this.mediaSession,
-      onError: (error) => void this.#recover(error, 'audio_output'),
+      onError: (error) => void this.#guard('audio_output', async () => { throw error; }),
       onUnderrun: (details) => {
         this.runtimeMetrics.latency.audioUnderruns = Number(this.runtimeMetrics.latency.audioUnderruns ?? 0) + 1;
         this.log.warn({ stage: 'audio.underrun', callId: this.call.id, ...details }, 'Agent audio queue underrun detected');

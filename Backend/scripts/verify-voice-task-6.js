@@ -117,6 +117,7 @@ client.send(JSON.stringify({ event: 'stop', sequenceNumber: 4, streamId: mediaSe
 await closed;
 assert.equal(sessionStore.get(call.id, { touch: false }), null);
 assert.equal(runtime.sessionCount, 0);
+assert.equal(mediaSession.clearAudio('after_close'), false, 'clearing a closed media socket must be harmless');
 assert.equal(ownershipEvents[0][0], 'claim');
 assert.equal(ownershipEvents.some(([event]) => event === 'release'), true);
 

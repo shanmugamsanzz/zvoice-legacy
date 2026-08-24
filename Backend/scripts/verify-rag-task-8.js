@@ -261,6 +261,12 @@ async function verifyRuntimeRouter() {
     assert.equal(catalog.item.currency, 'INR');
     assert.equal(catalog.item.attributes[0].key, 'fasting');
 
+    const catalogAlias = await routeKnowledgeQuery(auth, {
+      ...base, query: 'Silver price evlo?',
+    }, dependencies);
+    assert.equal(catalogAlias.route, 'catalog');
+    assert.equal(catalogAlias.item.price, 1650);
+
     const faq = await routeKnowledgeQuery(auth, {
       ...base, query: 'Where is the hospital?',
     }, dependencies);

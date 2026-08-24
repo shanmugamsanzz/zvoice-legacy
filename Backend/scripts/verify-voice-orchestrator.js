@@ -144,6 +144,13 @@ const orchestrator = new RealtimeConversationOrchestrator(media, {
   routeKnowledge: async (auth, input) => {
     knowledgeAuth.push(auth);
     knowledgeQueries.push(input.query);
+    if (input.query === 'Silver price evlo?') {
+      return {
+        route: 'catalog', found: true, content: 'Silver Package - INR 1650', durationMs: 1,
+        item: { name: 'Silver Package', price: 1650, currency: 'INR' },
+        source: { recordId: 'catalog-1', documentName: 'Package Catalog' },
+      };
+    }
     return { route: 'semantic', found: true, content: 'Appointments are available.', matches: [], durationMs: 4 };
   },
   executeTools: async (_runtimeProfile, _call, calls) => {
@@ -172,6 +179,12 @@ assert.equal(knowledgeAuth[0].workspaceId, 'workspace-1');
 assert.equal(toolInvocations[0].name, 'book_visit');
 assert.ok(tts.texts.includes('Your appointment is booked.'));
 assert.deepEqual(transcript.map((entry) => entry.speaker), ['agent', 'user', 'agent']);
+
+const llmRequestsBeforePrice = llm.requests.length;
+stt.publish({ type: 'final_transcript', text: 'Silver price evlo?', language: 'en', isFinal: true });
+await waitFor(() => transcript.some((entry) => entry.text === 'Silver Package price 1,650 rupees.'), 'Exact catalog price was not spoken');
+await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not return to listening after catalog price');
+assert.equal(llm.requests.length, llmRequestsBeforePrice, 'Exact catalog price must bypass the LLM');
 assert.ok(transcript.filter((entry) => entry.speaker === 'agent').every((entry) => entry.answerSources.length > 0));
 assert.equal(transcript.find((entry) => entry.text === 'Your appointment is booked.').answerSources[0].type, 'knowledge_base');
 

@@ -43,6 +43,22 @@ function fallbackRecovery(profile) {
       : 'Sorry, I had a temporary problem. Could you please say that again?');
 }
 
+const priceQuestionPattern = /\b(price|cost|rate|amount|how much|evlo|vilai)\b|விலை|எவ்வளவு/iu;
+
+function exactCatalogPriceAnswer(query, knowledge) {
+  if (knowledge?.route !== 'catalog' || !priceQuestionPattern.test(String(query ?? ''))) return null;
+  const name = String(knowledge.item?.name ?? '').trim();
+  const rawPrice = knowledge.item?.price;
+  if (!name || rawPrice === null || rawPrice === undefined || rawPrice === '') return null;
+  const numericPrice = Number(rawPrice);
+  const price = Number.isFinite(numericPrice)
+    ? new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(numericPrice)
+    : String(rawPrice).trim();
+  const currency = String(knowledge.item?.currency ?? '').trim().toUpperCase();
+  const spokenCurrency = currency === 'INR' ? 'rupees' : currency;
+  return `${name} price ${price}${spokenCurrency ? ` ${spokenCurrency}` : ''}.`;
+}
+
 function answerSources(knowledge, { toolUsed = false } = {}) {
   if (!knowledge?.found) {
     return [{ type: toolUsed ? 'agent_tool' : 'model', label: toolUsed ? 'Agent tool result' : 'AI model (no Knowledge Base match)' }];
@@ -442,19 +458,22 @@ export class RealtimeConversationOrchestrator {
     const turnStartedAt = Date.now();
     const knowledge = await this.#knowledge(query);
     if (epoch !== this.epoch || this.finalized) return;
-    let response;
-    try {
-      response = await this.#llm(query, history, knowledge);
-    } catch (error) {
-      this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'llm', this.runtimeProfile.providers.llm, 'failure', {
-        code: error.code,
-      });
-      if (!knowledge.found || !String(knowledge.content ?? '').trim()) throw error;
-      this.log.warn({
-        stage: 'llm.verified_knowledge_fallback', code: error.code,
-        providerId: this.runtimeProfile.providers.llm.providerId,
-      }, 'Selected LLM failed; using verified knowledge response for this call');
-      response = { cancelled: false, text: String(knowledge.content).trim(), toolCalls: [] };
+    const exactPrice = exactCatalogPriceAnswer(query, knowledge);
+    let response = exactPrice ? { cancelled: false, text: exactPrice, toolCalls: [] } : null;
+    if (!response) {
+      try {
+        response = await this.#llm(query, history, knowledge);
+      } catch (error) {
+        this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'llm', this.runtimeProfile.providers.llm, 'failure', {
+          code: error.code,
+        });
+        if (!knowledge.found || !String(knowledge.content ?? '').trim()) throw error;
+        this.log.warn({
+          stage: 'llm.verified_knowledge_fallback', code: error.code,
+          providerId: this.runtimeProfile.providers.llm.providerId,
+        }, 'Selected LLM failed; using verified knowledge response for this call');
+        response = { cancelled: false, text: String(knowledge.content).trim(), toolCalls: [] };
+      }
     }
     if (response.cancelled || epoch !== this.epoch) return;
     let toolUsed = false;

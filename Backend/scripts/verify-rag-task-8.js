@@ -171,6 +171,15 @@ async function createFixtures(client) {
      ) VALUES ($1,$2,$3,$4,$5,'fasting','Fasting','"8 hours"'::jsonb)`,
     [tenantId, knowledgeBaseId, itemId, catalog.documentId, catalog.versionId],
   );
+  await client.query(
+    `INSERT INTO structured_items (
+       tenant_id, knowledge_base_id, catalog_id, document_id, document_version_id,
+       item_key, name, description, price, currency, status, approved_at
+     ) VALUES
+       ($1,$2,$3,$4,$5,'gold_package','Gold Package','Advanced screening',4950,'INR','approved',now()),
+       ($1,$2,$3,$4,$5,'platinum_package','Platinum Package','Comprehensive screening',7980,'INR','approved',now())`,
+    [tenantId, knowledgeBaseId, catalogId, catalog.documentId, catalog.versionId],
+  );
   const faq = await createDocument(client, tenant, 'faq');
   await client.query(
     `INSERT INTO faq_entries (
@@ -266,6 +275,20 @@ async function verifyRuntimeRouter() {
     }, dependencies);
     assert.equal(catalogAlias.route, 'catalog');
     assert.equal(catalogAlias.item.price, 1650);
+
+    const goldCatalog = await routeKnowledgeQuery(auth, {
+      ...base, query: 'Gold package cost?',
+    }, dependencies);
+    assert.equal(goldCatalog.route, 'catalog');
+    assert.equal(goldCatalog.item.name, 'Gold Package');
+    assert.equal(goldCatalog.item.price, 4950);
+
+    const platinumCatalog = await routeKnowledgeQuery(auth, {
+      ...base, query: 'Platinum amount enna?',
+    }, dependencies);
+    assert.equal(platinumCatalog.route, 'catalog');
+    assert.equal(platinumCatalog.item.name, 'Platinum Package');
+    assert.equal(platinumCatalog.item.price, 7980);
 
     const faq = await routeKnowledgeQuery(auth, {
       ...base, query: 'Where is the hospital?',

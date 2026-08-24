@@ -59,6 +59,11 @@ function exactCatalogPriceAnswer(query, knowledge) {
   return `${name} price ${price}${spokenCurrency ? ` ${spokenCurrency}` : ''}.`;
 }
 
+function unverifiedCatalogPriceAnswer(query, knowledge) {
+  if (!priceQuestionPattern.test(String(query ?? '')) || exactCatalogPriceAnswer(query, knowledge)) return null;
+  return 'I could not verify that package price from the approved catalog. Please confirm the package name.';
+}
+
 function answerSources(knowledge, { toolUsed = false } = {}) {
   if (!knowledge?.found) {
     return [{ type: toolUsed ? 'agent_tool' : 'model', label: toolUsed ? 'Agent tool result' : 'AI model (no Knowledge Base match)' }];
@@ -459,7 +464,10 @@ export class RealtimeConversationOrchestrator {
     const knowledge = await this.#knowledge(query);
     if (epoch !== this.epoch || this.finalized) return;
     const exactPrice = exactCatalogPriceAnswer(query, knowledge);
-    let response = exactPrice ? { cancelled: false, text: exactPrice, toolCalls: [] } : null;
+    const unverifiedPrice = unverifiedCatalogPriceAnswer(query, knowledge);
+    let response = exactPrice || unverifiedPrice
+      ? { cancelled: false, text: exactPrice ?? unverifiedPrice, toolCalls: [] }
+      : null;
     if (!response) {
       try {
         response = await this.#llm(query, history, knowledge);

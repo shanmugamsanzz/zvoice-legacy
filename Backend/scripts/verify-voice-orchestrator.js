@@ -151,6 +151,13 @@ const orchestrator = new RealtimeConversationOrchestrator(media, {
         source: { recordId: 'catalog-1', documentName: 'Package Catalog' },
       };
     }
+    if (input.query === 'Gold price evlo?') {
+      return {
+        route: 'catalog', found: true, content: 'Gold Package - INR 4950', durationMs: 1,
+        item: { name: 'Gold Package', price: 4950, currency: 'INR' },
+        source: { recordId: 'catalog-2', documentName: 'Package Catalog' },
+      };
+    }
     return { route: 'semantic', found: true, content: 'Appointments are available.', matches: [], durationMs: 4 };
   },
   executeTools: async (_runtimeProfile, _call, calls) => {
@@ -185,6 +192,16 @@ stt.publish({ type: 'final_transcript', text: 'Silver price evlo?', language: 'e
 await waitFor(() => transcript.some((entry) => entry.text === 'Silver Package price 1,650 rupees.'), 'Exact catalog price was not spoken');
 await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not return to listening after catalog price');
 assert.equal(llm.requests.length, llmRequestsBeforePrice, 'Exact catalog price must bypass the LLM');
+
+stt.publish({ type: 'final_transcript', text: 'Gold price evlo?', language: 'en', isFinal: true });
+await waitFor(() => transcript.some((entry) => entry.text === 'Gold Package price 4,950 rupees.'), 'Gold catalog price was not spoken');
+await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not return to listening after Gold price');
+assert.equal(llm.requests.length, llmRequestsBeforePrice, 'Every exact catalog price must bypass the LLM');
+
+stt.publish({ type: 'final_transcript', text: 'Unknown package price?', language: 'en', isFinal: true });
+await waitFor(() => transcript.some((entry) => entry.text.startsWith('I could not verify that package price')), 'Unknown price was not rejected');
+await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not return to listening after unknown price');
+assert.equal(llm.requests.length, llmRequestsBeforePrice, 'Unverified prices must not reach the LLM');
 assert.ok(transcript.filter((entry) => entry.speaker === 'agent').every((entry) => entry.answerSources.length > 0));
 assert.equal(transcript.find((entry) => entry.text === 'Your appointment is booked.').answerSources[0].type, 'knowledge_base');
 

@@ -41,6 +41,7 @@ import {
   AlertCircle,
   Upload,
   Copy,
+  Pencil,
   X
 } from 'lucide-react';
 
@@ -69,11 +70,32 @@ interface ProviderModelOption {
 }
 interface AgentPhoneOption { id: string; number: string; status: string }
 
+interface AgentToolApiData {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+  description: string | null;
+  configuration: Record<string, unknown>;
+}
+
 type KnowledgeBaseStatus = 'draft' | 'processing' | 'ready' | 'partially_failed' | 'published' | 'deleting' | 'deleted';
 type KnowledgeDocumentType = 'faq' | 'catalog' | 'workflow_rules' | 'conversation_script' | 'general_knowledge';
 type SelectedKnowledgeFile = { name: string; size: number; type: string };
 
 const KNOWLEDGE_PDF_MAX_BYTES = 25 * 1024 * 1024;
+const defaultAppointmentToolSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['patient_name', 'patient_age', 'package_name', 'preferred_date', 'preferred_time'],
+  properties: {
+    patient_name: { type: 'string' },
+    patient_age: { type: 'integer' },
+    package_name: { type: 'string' },
+    preferred_date: { type: 'string' },
+    preferred_time: { type: 'string' },
+  },
+};
 const knowledgeDocumentCategories: Array<{
   type: KnowledgeDocumentType;
   title: string;
@@ -389,7 +411,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   }, [modelCatalogRefreshKey]);
 
   // Tools state
-  const [tools, setTools] = useState<Array<{ id: string; name: string; type: string; status: string; description: string | null }>>([]);
+  const [tools, setTools] = useState<AgentToolApiData[]>([]);
 
   // Real Knowledge Base state. Document upload and review actions are added in later Knowledge UI tasks.
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBaseApiData[]>([]);
@@ -425,10 +447,16 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const isKnowledgeUploading = Object.values(uploadingKnowledgeCategories).some(Boolean);
   const [newToolName, setNewToolName] = useState('');
   const [newToolType, setNewToolType] = useState('Webhook API');
+  const [newToolDescription, setNewToolDescription] = useState('Book a hospital appointment only after the caller confirms all appointment details.');
+  const [newToolUrl, setNewToolUrl] = useState('');
+  const [newToolMethod, setNewToolMethod] = useState<'POST' | 'PUT' | 'PATCH'>('POST');
+  const [newToolInputSchema, setNewToolInputSchema] = useState(JSON.stringify(defaultAppointmentToolSchema, null, 2));
+  const [editingToolId, setEditingToolId] = useState<string | null>(null);
+  const [toolSaving, setToolSaving] = useState(false);
 
   useEffect(() => {
     if (!agentId) { setTools([]); return; }
-    apiRequest<Array<{ id: string; name: string; type: string; status: string; description: string | null }>>(`/agents/${agentId}/tools`)
+    apiRequest<AgentToolApiData[]>(`/agents/${agentId}/tools`)
       .then(setTools)
       .catch((requestError) => setError(requestError instanceof Error ? requestError.message : 'Agent tools could not be loaded'));
   }, [agentId]);
@@ -829,20 +857,65 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     }
   };
 
+  const resetToolForm = () => {
+    setEditingToolId(null);
+    setNewToolName('');
+    setNewToolType('Webhook API');
+    setNewToolDescription('Book a hospital appointment only after the caller confirms all appointment details.');
+    setNewToolUrl('');
+    setNewToolMethod('POST');
+    setNewToolInputSchema(JSON.stringify(defaultAppointmentToolSchema, null, 2));
+  };
+
+  const editTool = (tool: AgentToolApiData) => {
+    const typeLabels: Record<string, string> = {
+      webhook_api: 'Webhook API', calcom: 'Cal.com', hubspot: 'Hubspot', salesforce: 'Salesforce',
+    };
+    const method = String(tool.configuration?.method ?? 'POST').toUpperCase();
+    setEditingToolId(tool.id);
+    setNewToolName(tool.name);
+    setNewToolType(typeLabels[tool.type] ?? 'Webhook API');
+    setNewToolDescription(tool.description ?? '');
+    setNewToolUrl(String(tool.configuration?.url ?? tool.configuration?.endpoint ?? ''));
+    setNewToolMethod(['POST', 'PUT', 'PATCH'].includes(method) ? method as 'POST' | 'PUT' | 'PATCH' : 'POST');
+    setNewToolInputSchema(JSON.stringify(tool.configuration?.inputSchema ?? defaultAppointmentToolSchema, null, 2));
+  };
+
   const addTool = async () => {
-    if (!newToolName.trim() || !agentId) return;
+    if (!newToolName.trim() || !newToolUrl.trim() || !agentId || toolSaving) return;
+    setToolSaving(true); setError('');
     try {
+      const inputSchema = JSON.parse(newToolInputSchema) as Record<string, unknown>;
+      if (!inputSchema || Array.isArray(inputSchema) || typeof inputSchema !== 'object') throw new Error('Input schema must be a JSON object.');
+      const endpoint = new URL(newToolUrl.trim());
+      if (endpoint.protocol !== 'https:' && endpoint.hostname !== 'localhost') throw new Error('Tool URL must use HTTPS.');
       const typeMap: Record<string, string> = { 'Webhook API': 'webhook_api', 'Cal.com': 'calcom', Hubspot: 'hubspot', Salesforce: 'salesforce' };
-      const created = await apiRequest<{ id: string; name: string; type: string; status: string; description: string | null }>(`/agents/${agentId}/tools`, {
-        method: 'POST', body: JSON.stringify({ name: newToolName, type: typeMap[newToolType] ?? 'webhook_api', status: 'active', description: 'Custom integrated developer tool connector', configuration: {} }),
+      const payload = {
+        name: newToolName.trim(), type: typeMap[newToolType] ?? 'webhook_api', status: 'active',
+        description: newToolDescription.trim() || null,
+        configuration: { url: endpoint.toString(), method: newToolMethod, inputSchema },
+      };
+      const saved = await apiRequest<AgentToolApiData>(editingToolId
+        ? `/agents/${agentId}/tools/${editingToolId}` : `/agents/${agentId}/tools`, {
+        method: editingToolId ? 'PUT' : 'POST', body: JSON.stringify(payload),
       });
-      setTools((current) => [...current, created]); setNewToolName('');
-    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Agent tool could not be created'); }
+      setTools((current) => editingToolId
+        ? current.map((tool) => tool.id === editingToolId ? saved : tool)
+        : [...current, saved]);
+      resetToolForm();
+      setSuccessMsg(editingToolId ? 'Tool updated successfully.' : 'Tool registered successfully.');
+      setTimeout(() => setSuccessMsg(null), 3000);
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Agent tool could not be saved'); }
+    finally { setToolSaving(false); }
   };
 
   const removeTool = async (id: string) => {
     if (!agentId) return;
-    try { await apiRequest(`/agents/${agentId}/tools/${id}`, { method: 'DELETE' }); setTools((current) => current.filter((tool) => tool.id !== id)); }
+    try {
+      await apiRequest(`/agents/${agentId}/tools/${id}`, { method: 'DELETE' });
+      setTools((current) => current.filter((tool) => tool.id !== id));
+      if (editingToolId === id) resetToolForm();
+    }
     catch (requestError) { setError(requestError instanceof Error ? requestError.message : 'Agent tool could not be deleted'); }
   };
 
@@ -2411,7 +2484,9 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Tool Creator Card */}
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 space-y-4">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-500 block">Register Custom API Tool</span>
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
+                  {editingToolId ? 'Edit API Tool' : 'Register Custom API Tool'}
+                </span>
                 
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 mb-1">Tool Identifier</label>
@@ -2440,15 +2515,74 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                   </select>
                 </div>
 
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1">Description</label>
+                  <textarea
+                    rows={3}
+                    value={newToolDescription}
+                    disabled={isReadOnly}
+                    onChange={(e) => setNewToolDescription(e.target.value)}
+                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-semibold text-slate-800 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1">Webhook URL</label>
+                  <input
+                    type="url"
+                    value={newToolUrl}
+                    disabled={isReadOnly}
+                    onChange={(e) => setNewToolUrl(e.target.value)}
+                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-800 outline-none"
+                    placeholder="https://n8n.example.com/webhook/booking"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1">Method</label>
+                  <select
+                    value={newToolMethod}
+                    disabled={isReadOnly}
+                    onChange={(e) => setNewToolMethod(e.target.value as 'POST' | 'PUT' | 'PATCH')}
+                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-800 outline-none"
+                  >
+                    <option value="POST">POST</option>
+                    <option value="PUT">PUT</option>
+                    <option value="PATCH">PATCH</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1">Input Schema</label>
+                  <textarea
+                    rows={10}
+                    value={newToolInputSchema}
+                    disabled={isReadOnly}
+                    onChange={(e) => setNewToolInputSchema(e.target.value)}
+                    spellCheck={false}
+                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 font-mono text-[10px] text-slate-800 outline-none"
+                  />
+                </div>
+
                 <button
                   type="button"
                   onClick={addTool}
-                  disabled={isReadOnly}
+                  disabled={isReadOnly || toolSaving || !newToolName.trim() || !newToolUrl.trim()}
                   className="w-full py-2 bg-gradient-to-r from-violet-600 to-pink-500 hover:from-violet-700 hover:to-pink-600 text-white rounded-lg text-xs font-bold transition shadow-sm flex items-center justify-center space-x-1"
                 >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Register Tool</span>
+                  {editingToolId ? <Save className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+                  <span>{toolSaving ? 'Saving...' : editingToolId ? 'Save Tool' : 'Register Tool'}</span>
                 </button>
+                {editingToolId && (
+                  <button
+                    type="button"
+                    onClick={resetToolForm}
+                    disabled={toolSaving}
+                    className="w-full py-2 border border-slate-200 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-100 transition"
+                  >
+                    Cancel
+                  </button>
+                )}
               </div>
 
               {/* Active Tools List */}
@@ -2466,13 +2600,24 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     </div>
 
                     {!isReadOnly && (
-                      <button
-                        type="button"
-                        onClick={() => void removeTool(t.id)}
-                        className="text-slate-400 hover:text-red-500 p-1.5 rounded-lg hover:bg-red-50 transition"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => editTool(t)}
+                          title="Edit tool"
+                          className="text-slate-400 hover:text-violet-600 p-1.5 rounded-lg hover:bg-violet-50 transition"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void removeTool(t.id)}
+                          title="Delete tool"
+                          className="text-slate-400 hover:text-red-500 p-1.5 rounded-lg hover:bg-red-50 transition"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     )}
                   </div>
                 ))}

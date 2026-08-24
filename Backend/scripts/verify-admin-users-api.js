@@ -99,6 +99,21 @@ try {
   const deleteUserPayload = await deleteUserResponse.json();
   assert.equal(deleteUserResponse.status, 200, JSON.stringify(deleteUserPayload));
   assert.equal(deleteUserPayload.data.deleted, true);
+  assert.equal(deleteUserPayload.data.permanentlyDeleted, true);
+
+  const recreateUserResponse = await fixture.api(fixture.base, '/admin/developers', {
+    method: 'POST', headers: fixture.adminHeaders,
+    body: JSON.stringify({
+      companyId: secondCompany.tenantId,
+      fullName: `Recreated User ${suffix}`,
+      email: updatedEmail,
+      password: fixture.password,
+      role: 'COMPANY_USER',
+    }),
+  });
+  const recreateUserPayload = await recreateUserResponse.json();
+  assert.equal(recreateUserResponse.status, 201, JSON.stringify(recreateUserPayload));
+  assert.notEqual(recreateUserPayload.data.userId, deleteUserPayload.data.userId);
 
   const remainingResponse = await fixture.api(
     fixture.base, `/admin/developers?companyId=${company.tenantId}&page=1&pageSize=100`,

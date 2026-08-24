@@ -292,24 +292,27 @@ export function deleteDeveloper(actorUserId, developerId, metadata = {}) {
         requestId, ipAddress, userAgent],
     );
     await client.query(
-      `UPDATE auth_sessions SET revoked_at = COALESCE(revoked_at, now()), revoke_reason = 'tenant_user_deleted'
-       WHERE membership_id = $1 AND revoked_at IS NULL`,
-      [developerId],
+      `UPDATE api_keys SET revoked_at = COALESCE(revoked_at, now()), revoked_by = $2,
+         revoke_reason = 'tenant_user_deleted'
+       WHERE created_by = $1 AND revoked_at IS NULL`,
+      [before.user_id, actorUserId],
     );
     await client.query(
-      `UPDATE tenant_memberships SET status = 'removed', deleted_at = now()
-       WHERE id = $1 AND deleted_at IS NULL`,
+      'DELETE FROM tenant_memberships WHERE id = $1',
       [developerId],
     );
-    await client.query(
-      `UPDATE users u SET status = 'archived', deleted_at = COALESCE(deleted_at, now())
+    const deletedUser = await client.query(
+      `DELETE FROM users u
        WHERE u.id = $1 AND u.platform_role IS NULL
-         AND NOT EXISTS (
-           SELECT 1 FROM tenant_memberships m
-           WHERE m.user_id = u.id AND m.deleted_at IS NULL
-         )`,
+         AND NOT EXISTS (SELECT 1 FROM tenant_memberships m WHERE m.user_id = u.id)
+       RETURNING id`,
       [before.user_id],
     );
-    return { id: developerId, userId: before.user_id, deleted: true };
+    return {
+      id: developerId,
+      userId: before.user_id,
+      deleted: true,
+      permanentlyDeleted: deletedUser.rowCount === 1,
+    };
   });
 }

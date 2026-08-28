@@ -90,6 +90,7 @@ await engine.flushSynthesized(generationId);
 await engine.drainOutput();
 assert.equal(sent.length, 1);
 assert.equal(sent[0].length, 160, 'Plivo receives paced 20 ms mu-law frames');
+assert.ok(clock >= 20, 'audio drain waits until estimated telephone playback completes');
 
 const sentBeforePacketTest = sent.length;
 const packetGenerationId = engine.beginOutputGeneration('response-packet');

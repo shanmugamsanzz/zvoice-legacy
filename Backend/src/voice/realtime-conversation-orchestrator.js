@@ -96,6 +96,7 @@ export class RealtimeConversationOrchestrator {
     this.finalized = false;
     this.closing = false;
     this.activeLlm = null;
+    this.activeSynthesisCount = 0;
     this.inactivityTimer = null;
     this.bargeInTimer = null;
     this.callerSpeechActive = false;
@@ -570,26 +571,32 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #synthesize(text, generationId, options = {}) {
-    let lastError;
-    for (let attempt = 0; attempt <= env.VOICE_PROVIDER_MAX_RETRIES; attempt += 1) {
-      try {
-        return await this.#synthesizeAttempt(text, generationId, options);
-      } catch (error) {
-        lastError = error;
-        const canRetry = error?.retryable === true && error.audioStarted !== true
-          && attempt < env.VOICE_PROVIDER_MAX_RETRIES;
-        if (!canRetry) throw error;
-        if (options.capture) options.capture.length = 0;
-        const delayMs = env.VOICE_PROVIDER_RETRY_BASE_MS * (2 ** attempt);
-        this.log.warn({
-          stage: 'tts.retry', attempt: attempt + 1, delayMs,
-          providerId: this.runtimeProfile.providers.tts.providerId,
-          modelId: this.runtimeProfile.providers.tts.modelId,
-        }, 'Retrying selected TTS before audio playback started');
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
+    this.#clearInactivity();
+    this.activeSynthesisCount += 1;
+    try {
+      let lastError;
+      for (let attempt = 0; attempt <= env.VOICE_PROVIDER_MAX_RETRIES; attempt += 1) {
+        try {
+          return await this.#synthesizeAttempt(text, generationId, options);
+        } catch (error) {
+          lastError = error;
+          const canRetry = error?.retryable === true && error.audioStarted !== true
+            && attempt < env.VOICE_PROVIDER_MAX_RETRIES;
+          if (!canRetry) throw error;
+          if (options.capture) options.capture.length = 0;
+          const delayMs = env.VOICE_PROVIDER_RETRY_BASE_MS * (2 ** attempt);
+          this.log.warn({
+            stage: 'tts.retry', attempt: attempt + 1, delayMs,
+            providerId: this.runtimeProfile.providers.tts.providerId,
+            modelId: this.runtimeProfile.providers.tts.modelId,
+          }, 'Retrying selected TTS before audio playback started');
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
       }
+      throw lastError;
+    } finally {
+      this.activeSynthesisCount = Math.max(0, this.activeSynthesisCount - 1);
     }
-    throw lastError;
   }
 
   async #onDtmf(digit) {
@@ -617,7 +624,7 @@ export class RealtimeConversationOrchestrator {
 
   #armInactivity() {
     this.#clearInactivity();
-    if (this.finalized || this.controller.state !== callStates.LISTENING) return;
+    if (this.finalized || this.activeSynthesisCount > 0 || this.controller.state !== callStates.LISTENING) return;
     const seconds = Number(this.runtimeProfile.agent.inactivityTimeoutSeconds ?? 0);
     if (!Number.isFinite(seconds) || seconds <= 0) return;
     this.inactivityTimer = setTimeout(() => void this.#guard('inactivity', () => this.#handleInactivity()), seconds * 1000);
@@ -625,7 +632,7 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #handleInactivity() {
-    if (this.finalized || this.controller.state !== callStates.LISTENING) return;
+    if (this.finalized || this.activeSynthesisCount > 0 || this.controller.state !== callStates.LISTENING) return;
     const action = await this.controller.handleSilence();
     if (action.action === 'close') return this.#close(action.reason);
     if (action.action !== 'inactivity_response') return;

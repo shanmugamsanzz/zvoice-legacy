@@ -148,9 +148,12 @@ export class AudioPacer {
     }
   }
 
-  drain() {
-    if (this.queue.size === 0 && !this.sending && !this.pendingFrame) return Promise.resolve();
-    return new Promise((resolve) => this.drainWaiters.push(resolve));
+  async drain() {
+    if (this.queue.size || this.sending || this.pendingFrame) {
+      await new Promise((resolve) => this.drainWaiters.push(resolve));
+    }
+    const remainingPlaybackMs = Math.max(0, this.remotePlaybackEndAt - this.now());
+    if (remainingPlaybackMs > 0) await this.sleep(remainingPlaybackMs, this.controller?.signal);
   }
 
   #resolveDrains() {

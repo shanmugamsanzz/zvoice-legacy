@@ -21,6 +21,8 @@ import { interruptionDecision } from './interruption/interruption-policy.js';
 
 const closeIntent = /\b(?:bye|goodbye|hang\s*up|disconnect|end (?:the )?call|not interested|call me later|i(?:'m| am) busy)\b|(?:போதும்|அழைப்பை முடி|பிறகு அழைக்கவும்)/iu;
 
+const bookingIntent = /\b(?:appointment|book(?:ing)?|schedule|visit)\b|\u0B85\u0BAA\u0BCD\u0BAA\u0BBE\u0BAF\u0BBF\u0BA3\u0BCD\u0B9F\u0BCD\u0BAE\u0BC6\u0BA3\u0BCD\u0B9F\u0BCD|\u0BAA\u0BC1\u0B95\u0BCD\s*\u0BAA\u0BA3\u0BCD\u0BA3/iu;
+
 function languageCode(value) {
   const match = String(value ?? '').match(/\b([a-z]{2,3})(?:-[A-Z]{2})?\b/);
   if (match) return match[1].toLowerCase();
@@ -62,6 +64,27 @@ function exactCatalogPriceAnswer(query, knowledge) {
 function unverifiedCatalogPriceAnswer(query, knowledge) {
   if (!priceQuestionPattern.test(String(query ?? '')) || exactCatalogPriceAnswer(query, knowledge)) return null;
   return 'I could not verify that package price from the approved catalog. Please confirm the package name.';
+}
+
+function toolResultFallback(toolResults, language, query) {
+  const results = Array.isArray(toolResults) ? toolResults : [];
+  if (!results.length) return '';
+  const tamil = /(?:tamil|\bta(?:-|\b))/i.test(String(language ?? ''));
+  if (results.some((result) => result.success !== true)) {
+    return tamil
+      ? 'Sorry nga, request complete aagala. Human assistance arrange pannattuma?'
+      : 'Sorry, I could not complete that request. Would you like human assistance?';
+  }
+  const bookingToolUsed = bookingIntent.test(String(query ?? ''))
+    || results.some((result) => /(?:appointment|book|schedule|visit)/i.test(String(result.name ?? '')));
+  if (bookingToolUsed) {
+    return tamil
+      ? 'Unga appointment successfully book aayiduchu. Vera edhavadhu help venuma nga?'
+      : 'Your appointment was booked successfully. Is there anything else I can help with?';
+  }
+  return tamil
+    ? 'Unga request successfully complete aayiduchu. Vera edhavadhu help venuma nga?'
+    : 'Your request was completed successfully. Is there anything else I can help with?';
 }
 
 function answerSources(knowledge, { toolUsed = false } = {}) {
@@ -311,7 +334,7 @@ export class RealtimeConversationOrchestrator {
     }
     if (this.controller.state !== callStates.LISTENING || !event.text.trim()) return;
     const action = await this.controller.receiveFinalTranscript(event.text);
-    if (closeIntent.test(event.text)) {
+    if (closeIntent.test(event.text) && !bookingIntent.test(event.text)) {
       await this.#close('caller_requested_hangup');
       return;
     }
@@ -402,6 +425,7 @@ export class RealtimeConversationOrchestrator {
   }
 
   async #llmAttempt(query, history, knowledge, context = {}) {
+    const { disableTools = false, ...runtimeContext } = context;
     const session = await createSelectedLlmStream(this.runtimeProfile, {
       callId: this.call.id,
       query,
@@ -411,8 +435,9 @@ export class RealtimeConversationOrchestrator {
         callId: this.call.id,
         direction: this.call.direction,
         preCall: this.preCallContext,
-        ...context,
+        ...runtimeContext,
       },
+      toolsEnabled: !disableTools,
       usageDirection: this.call.direction,
     }, { registry: this.registry, adapter: this.adapters.llm, skipDefaultRegistration: true });
     this.activeLlm = session;
@@ -497,8 +522,12 @@ export class RealtimeConversationOrchestrator {
       if (epoch !== this.epoch) return;
       response = await this.#llm(query, history, knowledge, {
         toolResults,
+        disableTools: true,
         instruction: 'Use these tool results to answer the caller. Never claim an unsuccessful tool completed.',
       });
+      if (!String(response.text ?? '').trim()) {
+        response = { ...response, text: toolResultFallback(toolResults, this.runtimeProfile.agent.language, query), toolCalls: [] };
+      }
     }
     if (response.cancelled || epoch !== this.epoch || this.finalized) return;
     const answer = response.text || String(this.runtimeProfile.agent.settings?.noResponseMessage ?? 'Sorry, I could not form a response.');

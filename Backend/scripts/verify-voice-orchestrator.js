@@ -49,16 +49,21 @@ class FakeLlm {
   async *stream(input) {
     this.requests.push(input);
     const query = input.messages.at(-1)?.content ?? '';
+    const hasToolResults = input.messages[0]?.content.includes('"toolResults"');
     yield { type: 'response_started' };
     if (query === 'slow request') {
       await new Promise((resolve) => { this.releaseSlow = resolve; });
       if (this.wasCancelled) { yield { type: 'cancelled', reason: 'barge-in' }; return; }
     }
-    if (query === 'book appointment' && this.requests.length === 1) {
+    if (query === 'book appointment' && !hasToolResults) {
       const toolCalls = [{ id: 'tool-1', name: 'book_visit', arguments: { date: 'tomorrow' } }];
       yield { type: 'tool_call', ...toolCalls[0] };
       yield { type: 'usage', usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 } };
       yield { type: 'completed', finishReason: 'tool_calls', toolCalls, usage: {} };
+      return;
+    }
+    if (query === 'book appointment' && hasToolResults) {
+      yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
       return;
     }
     const text = query.includes('End the call now') ? 'Thank you. Goodbye.' : 'Your appointment is booked.';
@@ -178,13 +183,14 @@ await waitFor(() => stt.sent.length === 1, 'Plivo audio was not forwarded to STT
 
 stt.publish({ type: 'speech_started' });
 stt.publish({ type: 'final_transcript', text: 'book appointment', language: 'en', isFinal: true });
-await waitFor(() => transcript.some((entry) => entry.text === 'Your appointment is booked.'), 'Agent response was not persisted');
+await waitFor(() => transcript.some((entry) => entry.text === 'Your appointment was booked successfully. Is there anything else I can help with?'), 'Tool success fallback was not persisted');
 await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not return to listening after playback');
 assert.deepEqual(knowledgeQueries, ['book appointment']);
 assert.equal(knowledgeAuth[0].tenantId, 'tenant-1');
 assert.equal(knowledgeAuth[0].workspaceId, 'workspace-1');
 assert.equal(toolInvocations[0].name, 'book_visit');
-assert.ok(tts.texts.includes('Your appointment is booked.'));
+assert.ok(tts.texts.includes('Your appointment was booked successfully. Is there anything else I can help with?'));
+assert.equal(llm.requests[1].tools.length, 0, 'Tools must be disabled while converting tool results into speech');
 assert.deepEqual(transcript.map((entry) => entry.speaker), ['agent', 'user', 'agent']);
 
 const llmRequestsBeforePrice = llm.requests.length;
@@ -203,7 +209,22 @@ await waitFor(() => transcript.some((entry) => entry.text.startsWith('I could no
 await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not return to listening after unknown price');
 assert.equal(llm.requests.length, llmRequestsBeforePrice, 'Unverified prices must not reach the LLM');
 assert.ok(transcript.filter((entry) => entry.speaker === 'agent').every((entry) => entry.answerSources.length > 0));
-assert.equal(transcript.find((entry) => entry.text === 'Your appointment is booked.').answerSources[0].type, 'knowledge_base');
+assert.equal(transcript.find((entry) => entry.text.startsWith('Your appointment was booked successfully.')).answerSources[0].type, 'knowledge_base');
+
+llm.wasCancelled = false;
+const completedBeforeBookingPriority = completed.length;
+const transcriptCountBeforeBookingPriority = transcript.length;
+const bookingPriorityText = '\u0B9A\u0BB0\u0BBF \u0BAA\u0BCB\u0BA4\u0BC1\u0BAE\u0BCD appointment book pannunga';
+stt.publish({
+  type: 'final_transcript',
+  text: bookingPriorityText,
+  language: 'ta',
+  isFinal: true,
+});
+await waitFor(() => transcript.some((entry) => entry.text === bookingPriorityText), 'Booking request containing a closing word was not processed');
+await waitFor(() => transcript.length >= transcriptCountBeforeBookingPriority + 2, 'Booking-priority response was not produced');
+await waitFor(() => orchestrator.controller.state === 'listening', 'Booking request containing a closing word did not complete');
+assert.equal(completed.length, completedBeforeBookingPriority, 'Booking intent must take priority over a closing word');
 
 llm.wasCancelled = false;
 stt.publish({ type: 'final_transcript', text: 'slow request', language: 'en', isFinal: true });

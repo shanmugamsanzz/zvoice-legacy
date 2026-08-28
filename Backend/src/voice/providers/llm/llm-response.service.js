@@ -64,7 +64,7 @@ export async function createSelectedLlmStream(runtimeProfile, input, dependencie
   return {
     events: llm.stream({
       messages,
-      tools: runtimeTools(runtimeProfile.tools),
+      tools: input.toolsEnabled === false ? [] : runtimeTools(runtimeProfile.tools),
       temperature: runtimeProfile.agent.temperature,
       maxOutputTokens: env.LLM_MAX_OUTPUT_TOKENS,
     }),

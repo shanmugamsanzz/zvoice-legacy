@@ -240,16 +240,21 @@ assert.ok(tts.cancelled > 0);
 assert.ok(audioEngine.cancelled.includes('caller_barge_in_sustained'));
 
 llm.wasCancelled = false;
+const transcriptCountBeforeGoodbye = transcript.length;
 stt.publish({ type: 'final_transcript', text: 'goodbye', language: 'en', isFinal: true });
-await waitFor(() => completed.length === 1, 'Call was not finalized after closing request');
+await waitFor(() => transcript.length >= transcriptCountBeforeGoodbye + 2, 'Spoken goodbye response was not produced');
+await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not remain open after spoken goodbye');
+assert.equal(completed.length, 0, 'Spoken words must not automatically disconnect the call');
+assert.equal(media.closed, false, 'Media must remain open until the caller or provider disconnects');
+media.close(1000, 'caller_hangup');
+await waitFor(() => completed.length === 1, 'Caller hang-up did not finalize the call');
 assert.equal(completed[0].outcome, 'completed');
-assert.equal(completed[0].reason, 'caller_requested_hangup');
+assert.equal(completed[0].reason, 'caller_hangup');
 assert.equal(completed[0].metrics.latency.welcomeCacheHit, true);
 assert.ok(completed[0].metrics.latency.welcomeAudioStartMs < 300);
 assert.ok(completed[0].metrics.latency.firstResponseAudioMs[0] < 1000);
 assert.equal(completed[0].metrics.knowledge[0].durationMs, 4);
 assert.equal(completed[0].metrics.tools[0].name, 'book_visit');
-assert.ok(tts.texts.includes('Thank you. Goodbye.'));
 assert.equal(media.closed, true);
 
 const inactivityMedia = new FakeMediaSession();

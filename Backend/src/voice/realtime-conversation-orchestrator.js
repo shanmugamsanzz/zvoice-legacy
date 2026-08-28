@@ -19,8 +19,6 @@ import { tenantProviderHealth } from './provider-health.service.js';
 import { renderWelcomeTemplate, welcomeTemplateContext } from './welcome-template.service.js';
 import { interruptionDecision } from './interruption/interruption-policy.js';
 
-const closeIntent = /\b(?:bye|goodbye|hang\s*up|disconnect|end (?:the )?call|not interested|call me later|i(?:'m| am) busy)\b|(?:போதும்|அழைப்பை முடி|பிறகு அழைக்கவும்)/iu;
-
 const bookingIntent = /\b(?:appointment|book(?:ing)?|schedule|visit)\b|\u0B85\u0BAA\u0BCD\u0BAA\u0BBE\u0BAF\u0BBF\u0BA3\u0BCD\u0B9F\u0BCD\u0BAE\u0BC6\u0BA3\u0BCD\u0B9F\u0BCD|\u0BAA\u0BC1\u0B95\u0BCD\s*\u0BAA\u0BA3\u0BCD\u0BA3/iu;
 
 function languageCode(value) {
@@ -334,10 +332,6 @@ export class RealtimeConversationOrchestrator {
     }
     if (this.controller.state !== callStates.LISTENING || !event.text.trim()) return;
     const action = await this.controller.receiveFinalTranscript(event.text);
-    if (closeIntent.test(event.text) && !bookingIntent.test(event.text)) {
-      await this.#close('caller_requested_hangup');
-      return;
-    }
     const epoch = ++this.epoch;
     void this.#guard('turn', () => this.#runTurn(event.text, action.history, epoch));
   }

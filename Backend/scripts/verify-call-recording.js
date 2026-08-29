@@ -34,7 +34,8 @@ const xml = buildPlivoStreamXml({ id: callId, providerCallId }, {
   recordingCallbackUrl: baseCall.recording_callback_url,
 });
 assert.match(xml, /<Record recordSession="true"/);
-assert.match(xml, /callbackUrl="https:\/\/api\.voice\.zeacrm\.com\/webhooks\/plivo\/recording\?call_id=/);
+assert.match(xml, /maxLength="3600"/);
+assert.match(xml, /callbackUrl="https:\/\/api\.zvoice\.zeacrm\.com\/webhooks\/plivo\/recording\?call_id=/);
 assert.match(xml, /fileFormat="mp3"/);
 assert.ok(xml.indexOf('<Record') < xml.indexOf('<Stream'));
 

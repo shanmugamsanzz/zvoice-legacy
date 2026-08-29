@@ -144,7 +144,7 @@ export function buildPlivoStreamXml(callSession, options = {}) {
     }
     const callback = new URL(options.recordingCallbackUrl);
     callback.searchParams.set('call_id', callSession.id);
-    recording = `<Record recordSession="true" callbackUrl="${xmlEscape(callback.toString())}" callbackMethod="POST" fileFormat="mp3" recordChannelType="stereo" />`;
+    recording = `<Record recordSession="true" maxLength="${env.VOICE_RECORDING_MAX_LENGTH_SECONDS}" callbackUrl="${xmlEscape(callback.toString())}" callbackMethod="POST" fileFormat="mp3" recordChannelType="stereo" />`;
   }
   return `<?xml version="1.0" encoding="UTF-8"?><Response>${recording}<Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">${xmlEscape(base.toString())}</Stream></Response>`;
 }

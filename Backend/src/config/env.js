@@ -88,6 +88,7 @@ const envSchema = z.object({
   VOICE_POSTCALL_MAX_RESPONSE_BYTES: z.coerce.number().int().min(1024).max(1048576).default(65536),
   VOICE_PRECALL_TIMEOUT_MS: z.coerce.number().int().min(250).max(30000).default(5000),
   VOICE_PRECALL_MAX_RESPONSE_BYTES: z.coerce.number().int().min(1024).max(1048576).default(65536),
+  VOICE_RECORDING_MAX_LENGTH_SECONDS: z.coerce.number().int().min(60).max(86400).default(3600),
   VOICE_RECORDING_MAX_BYTES: z.coerce.number().int().min(1_048_576).max(1_073_741_824).default(104_857_600),
   VOICE_RECORDING_DOWNLOAD_TIMEOUT_MS: z.coerce.number().int().min(5000).max(600000).default(120000),
   CAMPAIGN_WORKERS_ENABLED: booleanFromString.default(false),

@@ -62,9 +62,10 @@ export function SpeechPhraseRules({ agent, disabled, onChange }: {
       </label>
     </div>
     <PhraseList label="Acknowledgement / Continue Phrases" disabled={disabled} phrases={agent.interruptionAcknowledgements ?? []} onChange={(phrases) => onChange({ interruptionAcknowledgements: phrases })} />
-    <p className="text-xs text-slate-500">Only a complete matching phrase keeps playback going. After the agent finishes, “yes” or “ஆமா” is treated as your answer.</p>
+    <p className="text-xs text-slate-500">Repeated saved phrases such as “okay okay” also keep playback going. Add each spelling your caller uses: “okay” and “ஓகே” are separate entries. A longer request such as “okay, but…” can interrupt. After the agent finishes, acknowledgements remain valid answers.</p>
     <PhraseList label="Explicit Stop Phrases (optional)" disabled={disabled} phrases={agent.interruptionStopPhrases ?? []} onChange={(phrases) => onChange({ interruptionStopPhrases: phrases })} />
     <PhraseList label="Call Check Phrases" disabled={disabled} phrases={agent.callCheckPhrases ?? []} onChange={(phrases) => onChange({ callCheckPhrases: phrases })} />
+    <p className="text-xs text-slate-500">Repetitions such as “ஹலோ ஹலோ” match the saved “ஹலோ” phrase. Add Tamil and English spellings separately.</p>
     <label className="block text-xs font-bold text-slate-700">Call Check Response
       <textarea rows={2} maxLength={500} disabled={disabled} value={agent.callCheckResponse ?? ''} onChange={(event) => onChange({ callCheckResponse: event.target.value })}
         className="mt-2 block w-full rounded-lg border border-slate-200 p-3 text-xs font-normal" />

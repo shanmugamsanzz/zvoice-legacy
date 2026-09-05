@@ -38,6 +38,24 @@ assert.equal(interruptionDecision('hello', rules).callCheck, true);
 assert.equal(interruptionDecision('hello package price', rules).callCheck, false, 'Call checks require a whole-utterance match');
 assert.equal(interruptionDecision('stop', { ...rules, acknowledgements: ['stop'], callCheckPhrases: ['stop'] }).reason, 'explicit_stop');
 const { updateAgentSchema } = await import('../src/agents/agent.schemas.js');
+const repeatedRules = { minimumWords: 1, acknowledgements: ['okay', 'ஓகே', 'சரி', 'சொல்லுங்க'],
+  callCheckPhrases: ['hello', 'ஹலோ', 'hi'], explicitStopPhrases: ['wait', 'ஒரு நிமிஷம்'] };
+for (const text of ['okay okay', 'ஓகே ஓகே', 'ஓகே, சரி சொல்லுங்க']) {
+  assert.equal(interruptionDecision(text, repeatedRules).acknowledgement, true);
+  assert.equal(interruptionDecision(text, repeatedRules).confirmed, false);
+}
+for (const text of ['ஹலோ ஹலோ', 'hello hello', 'hello hi']) {
+  assert.equal(interruptionDecision(text, repeatedRules).callCheck, true);
+}
+assert.equal(interruptionDecision('ஒரு நிமிஷம் ஒரு நிமிஷம்', repeatedRules).explicitStop, true);
+for (const text of ['okay but tell me the price', 'ஓகே எனக்கு விலை சொல்லுங்க', 'ஹலோ என்ன ப்ராடக்ட்ஸ் இருக்கு']) {
+  const result = interruptionDecision(text, repeatedRules);
+  assert.equal(result.acknowledgement, false);
+  assert.equal(result.callCheck, false);
+  assert.equal(result.confirmed, true);
+}
+assert.equal(interruptionDecision('ஓகே ஓகே', { acknowledgements: ['okay'] }).acknowledgement, false,
+  'Cross-language aliases must be explicitly configured, not hardcoded');
 assert.equal(updateAgentSchema.safeParse({ settings: { callCheckPhrases: ['hello'], callCheckResponse: 'Yes, I can hear you.' } }).success, true);
 assert.equal(updateAgentSchema.safeParse({ settings: { callCheckResponse: 'x'.repeat(501) } }).success, false);
 assert.equal(updateAgentSchema.safeParse({ settings: { callCheckPhrases: [''] } }).success, false);

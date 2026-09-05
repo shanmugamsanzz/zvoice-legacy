@@ -252,7 +252,7 @@ assert.ok(tts.cancelled > 0);
 assert.ok(audioEngine.cancelled.includes('caller_barge_in_transcript'));
 
 // A call check is spoken directly, saved in the transcript, and bypasses KB/LLM.
-profile.agent.settings.callCheckPhrases = ['hello', 'கேக்குதா'];
+profile.agent.settings.callCheckPhrases = ['hello', 'கேக்குதா', 'ஹலோ'];
 profile.agent.settings.callCheckResponse = 'ஆமா, கேக்குது. சொல்லுங்க.';
 llm.wasCancelled = false;
 const beforeSlowCheck = llm.requests.length;
@@ -268,8 +268,16 @@ assert.equal(knowledgeQueries.length, beforeCheckKb);
 assert.ok(audioEngine.cancelled.includes('caller_call_check'), 'Call check must clear prior output before replying');
 assert.equal(transcript.find((entry) => entry.text === profile.agent.settings.callCheckResponse).answerSources[0].label, 'Agent call-check response');
 
+const beforeRepeatedCheck = tts.texts.length;
+stt.publish({ type: 'final_transcript', text: 'ஹலோ ஹலோ', isFinal: true });
+await waitFor(() => tts.texts.length > beforeRepeatedCheck, 'Repeated Tamil call check did not speak');
+await waitFor(() => orchestrator.controller.state === 'listening', 'Repeated call check did not finish');
+assert.equal(tts.texts.at(-1), profile.agent.settings.callCheckResponse);
+assert.equal(llm.requests.length, beforeCheckLlm, 'Repeated call checks must bypass the model');
+assert.equal(knowledgeQueries.length, beforeCheckKb, 'Repeated call checks must bypass KB');
+
 // The same one-word acknowledgement is a real answer when the agent is listening.
-profile.agent.settings.interruptionAcknowledgements.push('yes');
+profile.agent.settings.interruptionAcknowledgements.push('yes', 'okay', 'ஓகே');
 // STT can deliver the final acknowledgement after the agent finishes playback.
 // It still belongs to overlapping speech and must not create an extra response.
 let releasePlayback;
@@ -278,13 +286,18 @@ audioEngine.drainOutput = () => new Promise((resolve) => { releasePlayback = res
 stt.publish({ type: 'final_transcript', text: 'explain appointment', isFinal: true });
 await waitFor(() => releasePlayback && orchestrator.controller.state === 'speaking', 'Delayed acknowledgement setup did not reach playback');
 const beforeDelayedAck = llm.requests.length;
+const beforeAcknowledgementCancel = audioEngine.cancelled.length;
 stt.publish({ type: 'speech_started' });
-stt.publish({ type: 'partial_transcript', text: 'yes', isFinal: false });
+stt.publish({ type: 'partial_transcript', text: 'ஓகே', isFinal: false });
+stt.publish({ type: 'partial_transcript', text: 'ஓகே ஓகே', isFinal: false });
+await new Promise((resolve) => setTimeout(resolve, 400));
+assert.equal(orchestrator.controller.state, 'speaking', 'Repeated Tamil acknowledgement must preserve active audio');
+assert.equal(audioEngine.cancelled.length, beforeAcknowledgementCancel);
 stt.publish({ type: 'speech_ended' });
 audioEngine.drainOutput = originalDrain;
 releasePlayback();
 await waitFor(() => orchestrator.controller.state === 'listening', 'Playback did not finish before delayed STT final');
-stt.publish({ type: 'final_transcript', text: 'yes', isFinal: true });
+stt.publish({ type: 'final_transcript', text: 'ஓகே ஓகே', isFinal: true });
 await new Promise((resolve) => setTimeout(resolve, 50));
 assert.equal(llm.requests.length, beforeDelayedAck, 'Delayed overlapping acknowledgement must not become a new user turn');
 const beforeYes = transcript.length;

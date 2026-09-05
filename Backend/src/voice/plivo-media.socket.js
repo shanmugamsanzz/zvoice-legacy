@@ -6,6 +6,7 @@ import { AppError } from '../middleware/errors.js';
 import { validateVoiceMediaToken } from './plivo-answer.service.js';
 import { activeCallSessions, loadVoiceMediaCallSession } from './call-session-store.js';
 import { voiceCallOwnership } from './call-ownership.service.js';
+import { claimBrowserTestCall } from './browser-test.service.js';
 
 const mediaPath = '/webhooks/plivo/media';
 const plivoProtocol = 'audio.drachtio.org';
@@ -411,6 +412,7 @@ export function attachPlivoMediaWebSocket(httpServer, options = {}) {
           throw new AppError(409, 'A media connection is already active for this call', 'VOICE_MEDIA_ALREADY_CONNECTED');
         }
         await ownership.claimMedia({ tenantId: call.tenantId, providerCallId: call.providerCallId });
+        await (options.claimBrowserTestCall ?? claimBrowserTestCall)(call);
         wss.handleUpgrade(request, socket, head, (webSocket) => {
           wss.emit('connection', webSocket, request, { call, tokenPayload });
         });

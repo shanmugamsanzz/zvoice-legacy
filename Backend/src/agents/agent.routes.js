@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { authenticateRequest, requireRoles } from '../auth/auth.middleware.js';
+import { authenticateRequest, requireRoles, requireSessionAuthentication } from '../auth/auth.middleware.js';
+import { createBrowserTestCall } from '../voice/browser-test.service.js';
 import { requireTenantContext } from '../auth/tenant.middleware.js';
 import { AppError } from '../middleware/errors.js';
 import { agentIdSchema, agentStatusSchema, createAgentSchema, listAgentsSchema, parseAgentInput, updateAgentSchema } from './agent.schemas.js';
@@ -9,6 +10,10 @@ function valid(schema,value){const parsed=parseAgentInput(schema,value);if(!pars
 function auth(req){return{...req.auth,tenantId:req.tenant.tenantId,workspaceId:req.tenant.workspaceId};}
 const writers=requireRoles('SUPER_ADMIN','COMPANY_DEVELOPER');
 export const agentRouter=Router(); agentRouter.use(authenticateRequest,requireTenantContext);
+agentRouter.post('/:agentId/test-call',requireSessionAuthentication,async(req,res)=>{
+  const { agentId }=valid(agentIdSchema,req.params);
+  res.set('Cache-Control','no-store').status(201).json({success:true,data:await createBrowserTestCall(auth(req),agentId)});
+});
 agentRouter.use('/:agentId',agentResourceRouter);
 agentRouter.get('/',async(req,res)=>res.json({success:true,data:await listAgents(auth(req),valid(listAgentsSchema,req.query))}));
 agentRouter.get('/:agentId',async(req,res)=>{const{agentId}=valid(agentIdSchema,req.params);res.json({success:true,data:await getAgent(auth(req),agentId)});});

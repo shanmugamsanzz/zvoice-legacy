@@ -10,6 +10,11 @@ import {
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:1112').replace(/\/$/, '');
 const TOKEN_KEY = 'zea_voice_access_token';
+export function apiWebSocketUrl(path: string) {
+  const url = new URL(`${API_BASE_URL}${path}`, window.location.href);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.toString();
+}
 // The first phone assignment provisions a Plivo subaccount and application
 // before transferring the number, so allow enough time for provider calls.
 const REQUEST_TIMEOUT_MS = 45_000;

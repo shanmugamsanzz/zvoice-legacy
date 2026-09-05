@@ -4,6 +4,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
+import { BrowserTestDialog } from '../agent/BrowserTestDialog';
 import { useAppState } from '../../store/AppState';
 import { COMPLETED_CALL_LOGS } from '../../lib/mockData';
 import { VoiceAgent, Campaign, PhoneNumber } from '../../types';
@@ -41,6 +42,7 @@ import {
   Grid,
   List,
   PhoneCall,
+  Mic,
   PhoneIncoming,
   PhoneOutgoing,
   ChevronRight,
@@ -1613,6 +1615,12 @@ function agentFromApi(value: AgentApiData): VoiceAgent {
 }
 
 function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents: VoiceAgent[]; setAgents: React.Dispatch<React.SetStateAction<VoiceAgent[]>>; onEditAgent: (id: string) => void; onAddAgent: () => void }) {
+  const [testAgent, setTestAgent] = useState<VoiceAgent | null>(null);
+  const testDialog = testAgent && <BrowserTestDialog agent={testAgent} onClose={() => setTestAgent(null)} />;
+  const testButton = (agent: VoiceAgent) => <button onClick={() => setTestAgent(agent)} disabled={agent.status !== 'active'}
+    title={agent.status !== 'active' ? 'Activate this agent to test it' : 'Test this agent using your microphone'}
+    className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 py-2.5 text-xs font-bold text-indigo-700 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-40">
+    <Mic className="h-3.5 w-3.5" />Test Agent</button>;
   const { role } = useAppState();
   const isReadOnly = role === 'USER';
 
@@ -1668,6 +1676,7 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
   if (isReadOnly) {
     return (
       <div className="space-y-6">
+        {testDialog}
         {agentError && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">{agentError}</div>}
         {/* Header Row */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-6 border-b border-slate-200">
@@ -1764,6 +1773,7 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
                         </span>
                         <span>{agent.statusLabel}</span>
                       </span>
+                      {testButton(agent)}
                     </div>
                   </div>
                 ))}
@@ -1802,6 +1812,7 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
                     </span>
                   </div>
                 </div>
+                {testButton(agent)}
               </div>
             ))}
           </div>
@@ -1812,6 +1823,7 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
 
   return (
     <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+      {testDialog}
       {agentError && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">{agentError}</div>}
       <div className="flex justify-between items-center border-b border-slate-200 pb-5 mb-5">
         <div>
@@ -1867,6 +1879,7 @@ function AgentsListView({ agents, setAgents, onEditAgent, onAddAgent }: { agents
               </div>
             </div>
 
+            {testButton(agent)}
             <div className="mt-4 grid grid-cols-[1fr_auto_auto] gap-2">
               <button onClick={() => onEditAgent(agent.id)} className="py-2.5 bg-slate-50 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 rounded-lg text-xs font-bold transition border border-slate-200 flex items-center justify-center space-x-1 cursor-pointer"><span>Architect Engine</span><ArrowRight className="w-3.5 h-3.5" /></button>
               <button onClick={() => void toggleAgentStatus(agent)} title={agent.status === 'active' ? 'Set draft' : 'Activate'} className="rounded-lg border border-amber-100 bg-amber-50 px-3 text-xs font-bold text-amber-700">{agent.status === 'active' ? 'Draft' : 'Activate'}</button>

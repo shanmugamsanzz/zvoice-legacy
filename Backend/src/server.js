@@ -11,6 +11,8 @@ import { assertRagInfrastructure } from './rag/rag-infrastructure.js';
 import { closeKnowledgeProcessingWorker, startKnowledgeProcessingWorker } from './knowledge-bases/knowledge-processing.worker.js';
 import { attachPlivoMediaWebSocket } from './voice/plivo-media.socket.js';
 import { attachRealtimeConversationOrchestrator } from './voice/realtime-conversation-orchestrator.js';
+import { attachBrowserTestRuntime } from './voice/browser-test-runtime.js';
+import { reapBrowserTestCalls } from './voice/browser-test.service.js';
 import { closeRecordingWorker, startRecordingWorker } from './telephony/recording.worker.js';
 
 async function bootstrap() {
@@ -31,9 +33,14 @@ async function bootstrap() {
   const server = createServer(createApp());
   const mediaWebSocket = attachPlivoMediaWebSocket(server, {
     onSession(session) {
-      attachRealtimeConversationOrchestrator(session);
+      if (session.call.providerMetadata?.source === 'browser-test') attachBrowserTestRuntime(session);
+      else attachRealtimeConversationOrchestrator(session);
     },
   });
+  const browserCleanup = setInterval(() => {
+    void reapBrowserTestCalls().catch((error) => logger.error({ err: error }, 'Browser test cleanup failed'));
+  }, 15_000);
+  browserCleanup.unref();
   server.listen(env.PORT, env.HOST, () => {
     logger.info({ host: env.HOST, port: env.PORT }, 'Zea Voice API is running');
     logger.info({
@@ -46,6 +53,7 @@ async function bootstrap() {
   const shutdown = async (signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    clearInterval(browserCleanup);
     logger.info({ signal }, 'Graceful shutdown started');
 
     await mediaWebSocket.close();

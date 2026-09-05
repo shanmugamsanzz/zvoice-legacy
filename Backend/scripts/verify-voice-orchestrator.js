@@ -149,6 +149,10 @@ const orchestrator = new RealtimeConversationOrchestrator(media, {
   routeKnowledge: async (auth, input) => {
     knowledgeAuth.push(auth);
     knowledgeQueries.push(input.query);
+    if (input.query === 'FAQ plan price?') {
+      return { route: 'faq', found: true, content: 'FAQ plan costs INR 999 per month.', durationMs: 1,
+        source: { recordId: 'faq-price', documentName: 'Approved FAQ' } };
+    }
     if (input.query === 'Silver price evlo?') {
       return {
         route: 'catalog', found: true, content: 'Silver Package - INR 1650', durationMs: 1,
@@ -208,6 +212,10 @@ stt.publish({ type: 'final_transcript', text: 'Unknown package price?', language
 await waitFor(() => transcript.some((entry) => entry.text.startsWith('I could not verify that package price')), 'Unknown price was not rejected');
 await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not return to listening after unknown price');
 assert.equal(llm.requests.length, llmRequestsBeforePrice, 'Unverified prices must not reach the LLM');
+
+stt.publish({ type: 'final_transcript', text: 'FAQ plan price?', language: 'en', isFinal: true });
+await waitFor(() => llm.requests.length > llmRequestsBeforePrice, 'Approved FAQ pricing must reach the LLM');
+await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not return to listening after FAQ price');
 assert.ok(transcript.filter((entry) => entry.speaker === 'agent').every((entry) => entry.answerSources.length > 0));
 assert.equal(transcript.find((entry) => entry.text.startsWith('Your appointment was booked successfully.')).answerSources[0].type, 'knowledge_base');
 

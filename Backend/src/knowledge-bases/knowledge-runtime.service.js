@@ -1,3 +1,4 @@
+import { normalizeKnowledgeText as normalize, catalogKeywords, catalogLookup } from './catalog-matching.js';
 import crypto from 'node:crypto';
 import { env } from '../config/env.js';
 import { redis } from '../infrastructure/redis.js';
@@ -12,11 +13,6 @@ const defaultDependencies = {
   search: searchTenantPoints,
   cache: redis,
 };
-
-function normalize(value) {
-  return String(value ?? '').normalize('NFKC').toLocaleLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/\s+/gu, ' ');
-}
 
 function usageAllowed(configured, requested) {
   return configured === 'both' || configured === requested;
@@ -204,39 +200,11 @@ function conversationRoute(profile, input) {
   };
 }
 
-const catalogKeywords = /\b(price|cost|rate|amount|how much|package|plan|tests?|includes?|details?|evlo|vilai)\b|விலை|எவ்வளவு/iu;
-const genericCatalogTokens = new Set([
-  'package', 'plan', 'health', 'checkup', 'check', 'up', 'master', 'screening',
-  'price', 'cost', 'rate', 'amount', 'details', 'detail', 'test', 'tests',
-]);
-
-function identifyingTokens(value) {
-  return normalize(value).split(' ').filter((token) => token && !genericCatalogTokens.has(token));
-}
-
-function catalogMatch(profile, normalizedQuery) {
-  const queryTokens = new Set(normalizedQuery.split(' ').filter(Boolean));
-  const candidates = profile.catalog_items.map((item) => {
-    const names = [item.name, item.item_key].map(normalize).filter(Boolean);
-    const exactScore = Math.max(0, ...names.map((name) => (
-      normalizedQuery === name || normalizedQuery.includes(name) ? 1000 + name.length : 0
-    )));
-    const tokenScore = Math.max(0, ...names.map((name) => {
-      const tokens = identifyingTokens(name);
-      if (!tokens.length) return 0;
-      const matched = tokens.filter((token) => queryTokens.has(token)).length;
-      return matched ? Math.round((matched / tokens.length) * 100) + matched : 0;
-    }));
-    return { item, score: Math.max(exactScore, tokenScore) };
-  }).filter((candidate) => candidate.score > 0)
-    .sort((left, right) => right.score - left.score);
-  if (candidates.length > 1 && candidates[0].score === candidates[1].score) return null;
-  return candidates[0]?.item ?? null;
-}
-
 function catalogRoute(profile, input, normalizedQuery) {
   if (input.routeHint !== 'catalog' && !catalogKeywords.test(normalizedQuery)) return null;
-  const record = catalogMatch(profile, normalizedQuery);
+  const candidates = catalogLookup(profile.catalog_items, input.query, input.history);
+  if (candidates.length > 1) return { route: 'catalog', found: false, ambiguous: true, content: null, source: null };
+  const record = candidates[0];
   if (!record) return null;
   const price = record.price == null ? null : `${record.currency ?? ''} ${record.price}`.trim();
   const content = [record.name, price, record.description].filter(Boolean).join(' - ');

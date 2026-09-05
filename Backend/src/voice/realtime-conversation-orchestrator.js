@@ -1,3 +1,4 @@
+import { priceQuestionPattern, hasKnowledgePrice } from '../knowledge-bases/catalog-matching.js';
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import { AppError } from '../middleware/errors.js';
@@ -43,8 +44,6 @@ function fallbackRecovery(profile) {
       : 'Sorry, I had a temporary problem. Could you please say that again?');
 }
 
-const priceQuestionPattern = /\b(price|cost|rate|amount|how much|evlo|vilai)\b|விலை|எவ்வளவு/iu;
-
 function exactCatalogPriceAnswer(query, knowledge) {
   if (knowledge?.route !== 'catalog' || !priceQuestionPattern.test(String(query ?? ''))) return null;
   const name = String(knowledge.item?.name ?? '').trim();
@@ -60,7 +59,9 @@ function exactCatalogPriceAnswer(query, knowledge) {
 }
 
 function unverifiedCatalogPriceAnswer(query, knowledge) {
+  if (knowledge?.ambiguous) return 'Please confirm the product and plan name so I can give you the correct price.';
   if (!priceQuestionPattern.test(String(query ?? '')) || exactCatalogPriceAnswer(query, knowledge)) return null;
+  if (knowledge?.route !== 'catalog' && hasKnowledgePrice(knowledge)) return null;
   return 'I could not verify that package price from the approved catalog. Please confirm the package name.';
 }
 
@@ -457,7 +458,7 @@ export class RealtimeConversationOrchestrator {
     return true;
   }
 
-  async #knowledge(query) {
+  async #knowledge(query, history = []) {
     try {
       const routeKnowledge = this.dependencies.routeKnowledge ?? routeKnowledgeQuery;
       const result = await routeKnowledge({
@@ -471,6 +472,7 @@ export class RealtimeConversationOrchestrator {
         usageDirection: this.call.direction,
         language: languageCode(this.runtimeProfile.agent.language),
         routeHint: 'auto',
+        history,
       });
       this.runtimeMetrics.knowledge.push({
         route: result.route, found: result.found === true, durationMs: Number(result.durationMs ?? 0),
@@ -545,7 +547,7 @@ export class RealtimeConversationOrchestrator {
 
   async #runTurn(query, history, epoch) {
     const turnStartedAt = Date.now();
-    const knowledge = await this.#knowledge(query);
+    const knowledge = await this.#knowledge(query, history);
     if (epoch !== this.epoch || this.finalized) return;
     const exactPrice = exactCatalogPriceAnswer(query, knowledge);
     const unverifiedPrice = unverifiedCatalogPriceAnswer(query, knowledge);

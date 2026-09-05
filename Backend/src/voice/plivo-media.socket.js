@@ -6,6 +6,7 @@ import { AppError } from '../middleware/errors.js';
 import { validateVoiceMediaToken } from './plivo-answer.service.js';
 import { activeCallSessions, loadVoiceMediaCallSession } from './call-session-store.js';
 import { voiceCallOwnership } from './call-ownership.service.js';
+import { startCallHeartbeat } from './call-heartbeat.js';
 import { claimBrowserTestCall } from './browser-test.service.js';
 
 const mediaPath = '/webhooks/plivo/media';
@@ -350,7 +351,7 @@ export function attachPlivoMediaWebSocket(httpServer, options = {}) {
   });
 
   wss.on('connection', (socket, request, authenticated) => {
-    let heartbeatTimer;
+    let stopHeartbeat;
     const session = new PlivoMediaSession({
       socket,
       call: authenticated.call,
@@ -359,7 +360,7 @@ export function attachPlivoMediaWebSocket(httpServer, options = {}) {
       maxMessageBytes: options.maxMessageBytes,
       maxPendingMessages: options.maxPendingMessages,
       onClosed(closedSession) {
-        clearInterval(heartbeatTimer);
+        stopHeartbeat?.();
         sessions.delete(closedSession);
         sessionStore.deleteIf(closedSession.callId, closedSession);
         void ownership.release({
@@ -371,17 +372,12 @@ export function attachPlivoMediaWebSocket(httpServer, options = {}) {
     try {
       sessionStore.add(session.callId, session);
       sessions.add(session);
-      heartbeatTimer = setInterval(() => {
-        void ownership.heartbeat({
-          tenantId: session.call.tenantId, providerCallId: session.providerCallId,
-        }).then((owned) => {
-          if (!owned) session.close(1012, 'voice call ownership lost');
-        }).catch((error) => {
-          log.error({ err: error, callId: session.callId }, 'Voice call heartbeat failed');
-          session.close(1012, 'voice call heartbeat failed');
-        });
-      }, options.heartbeatIntervalMs ?? env.VOICE_CALL_HEARTBEAT_INTERVAL_MS);
-      heartbeatTimer.unref?.();
+      stopHeartbeat = startCallHeartbeat({
+        session, ownership,
+        intervalMs: options.heartbeatIntervalMs ?? env.VOICE_CALL_HEARTBEAT_INTERVAL_MS,
+        ttlMs: (ownership.ttlSeconds ?? env.VOICE_CALL_OWNERSHIP_TTL_SECONDS) * 1000,
+        claimedAt: authenticated.claimedAt,
+      });
       options.onSession?.(session, authenticated);
     } catch (error) {
       session.close(1008, error.code ?? 'duplicate call session');
@@ -411,10 +407,11 @@ export function attachPlivoMediaWebSocket(httpServer, options = {}) {
         if (sessionStore.get(callId, { touch: false })) {
           throw new AppError(409, 'A media connection is already active for this call', 'VOICE_MEDIA_ALREADY_CONNECTED');
         }
+        const claimedAt = performance.now();
         await ownership.claimMedia({ tenantId: call.tenantId, providerCallId: call.providerCallId });
         await (options.claimBrowserTestCall ?? claimBrowserTestCall)(call);
         wss.handleUpgrade(request, socket, head, (webSocket) => {
-          wss.emit('connection', webSocket, request, { call, tokenPayload });
+          wss.emit('connection', webSocket, request, { call, tokenPayload, claimedAt });
         });
       } catch (error) {
         log.warn({ code: error.code, callId: url.searchParams.get('call_id') ?? null }, 'Plivo media WebSocket upgrade rejected');

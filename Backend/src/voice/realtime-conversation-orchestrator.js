@@ -419,6 +419,9 @@ export class RealtimeConversationOrchestrator {
 
   async #considerTranscriptInterruption(text, final) {
     if (![callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) return false;
+    // STT may revise an earlier multi-word partial down to a single word.
+    // The confirmation timer must always evaluate the latest transcript.
+    this.bargeInText = text;
     const decision = interruptionDecision(text, this.#interruptionOptions());
     this.log[decision.confirmed ? 'info' : 'debug']({
       stage: 'conversation.barge_in_decision', callId: this.call.id,

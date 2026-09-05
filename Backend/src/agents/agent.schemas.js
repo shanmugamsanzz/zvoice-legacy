@@ -6,6 +6,8 @@ const agentSettingsSchema = z.object({
   interruptionMinWords: z.number().int().min(1).max(10).optional(),
   interruptionAcknowledgements: interruptionPhraseList.optional(),
   interruptionStopPhrases: interruptionPhraseList.optional(),
+  callCheckPhrases: interruptionPhraseList.optional(),
+  callCheckResponse: z.string().trim().max(500).optional(),
 }).catchall(z.unknown());
 
 const fields = {

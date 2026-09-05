@@ -120,6 +120,8 @@ export class RealtimeConversationOrchestrator {
     this.activeSynthesisCount = 0;
     this.inactivityTimer = null;
     this.bargeInTimer = null;
+    this.bargeInText = '';
+    this.bargeInStartedAt = 0;
     this.callerSpeechActive = false;
     this.listeners = [];
     this.runtimeMetrics = { knowledge: [], tools: [], latency: {} };
@@ -326,6 +328,22 @@ export class RealtimeConversationOrchestrator {
     }
     if (event.type !== 'final_transcript') return;
     this.#clearInactivity();
+    const phraseDecision = interruptionDecision(event.text, this.#interruptionOptions());
+    if (phraseDecision.explicitStop || phraseDecision.callCheck) {
+      this.log.info({ stage: 'conversation.phrase_rule', callId: this.call.id, reason: phraseDecision.reason }, 'Configured speech phrase matched');
+      await this.#cancelActive(phraseDecision.explicitStop ? 'caller_explicit_stop' : 'caller_call_check');
+      if (this.controller.state !== callStates.LISTENING || this.finalized) return;
+      const epoch = ++this.epoch;
+      await this.controller.receiveFinalTranscript(event.text);
+      if (epoch !== this.epoch || this.finalized) return;
+      if (phraseDecision.explicitStop) {
+        await this.controller.interrupt('caller_requested_listening');
+        this.#armInactivity();
+      } else {
+        void this.#guard('call_check', () => this.#respondToCallCheck(epoch));
+      }
+      return;
+    }
     if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
       const interrupted = await this.#considerTranscriptInterruption(event.text, true);
       if (!interrupted) return;
@@ -343,7 +361,23 @@ export class RealtimeConversationOrchestrator {
       minimumWords: Number(settings.interruptionMinWords ?? env.VOICE_BARGE_IN_MIN_WORDS),
       acknowledgements: Array.isArray(settings.interruptionAcknowledgements) ? settings.interruptionAcknowledgements : [],
       explicitStopPhrases: Array.isArray(settings.interruptionStopPhrases) ? settings.interruptionStopPhrases : [],
+      callCheckPhrases: String(settings.callCheckResponse ?? '').trim() && Array.isArray(settings.callCheckPhrases)
+        ? settings.callCheckPhrases : [],
+      requireTranscript: ['interruptionAcknowledgements', 'interruptionStopPhrases', 'callCheckPhrases']
+        .some((key) => Array.isArray(settings[key])),
     };
+  }
+
+  async #respondToCallCheck(epoch) {
+    if (this.finalized || epoch !== this.epoch) return;
+    const text = String(this.runtimeProfile.agent.settings.callCheckResponse).trim();
+    await this.controller.setAssistantResponse(text, Date.now(), [{ type: 'agent_config', label: 'Agent call-check response' }]);
+    if (this.finalized || epoch !== this.epoch) return;
+    await this.#synthesize(text, `call-check-${epoch}`);
+    if (!this.finalized && epoch === this.epoch && this.controller.state === callStates.SPEAKING) {
+      await this.controller.playbackComplete();
+      this.#armInactivity();
+    }
   }
 
   #clearBargeInTimer() {
@@ -352,6 +386,10 @@ export class RealtimeConversationOrchestrator {
   }
 
   #startBargeInConfirmation() {
+    if (!this.callerSpeechActive) {
+      this.bargeInStartedAt = Date.now();
+      this.bargeInText = '';
+    }
     this.callerSpeechActive = true;
     if (this.bargeInTimer) return;
     const { confirmationMs } = this.#interruptionOptions();
@@ -363,6 +401,13 @@ export class RealtimeConversationOrchestrator {
       this.bargeInTimer = null;
       if (!this.callerSpeechActive || this.finalized
         || ![callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) return;
+      const options = this.#interruptionOptions();
+      if (options.requireTranscript) {
+        // A duration-only decision can fire before STT identifies a long acknowledgement.
+        // With phrase rules configured, wait for recognizable words instead.
+        if (this.bargeInText) await this.#considerTranscriptInterruption(this.bargeInText, false);
+        return;
+      }
       this.log.info({
         stage: 'conversation.barge_in_decision', callId: this.call.id,
         decision: 'confirmed', reason: 'sustained_speech', confirmationMs,
@@ -381,11 +426,16 @@ export class RealtimeConversationOrchestrator {
       wordCount: decision.wordCount, final,
     }, decision.confirmed ? 'Caller transcript confirmed interruption' : 'Caller transcript did not confirm interruption');
     if (!decision.confirmed) {
-      if (final || decision.acknowledgement) {
+      if (final || decision.acknowledgement || decision.callCheck) {
         this.callerSpeechActive = false;
         this.#clearBargeInTimer();
       }
       return false;
+    }
+    if (!final && !decision.explicitStop) {
+      if (!this.callerSpeechActive) this.#startBargeInConfirmation();
+      this.bargeInText = text;
+      if (Date.now() - this.bargeInStartedAt < this.#interruptionOptions().confirmationMs) return false;
     }
     this.callerSpeechActive = false;
     this.#clearBargeInTimer();

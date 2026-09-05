@@ -12,7 +12,8 @@ export function interruptionDecision(value, options = {}) {
   const acknowledgements = new Set((options.acknowledgements ?? []).map(normalizeInterruptionText));
   const explicitPhrases = (options.explicitStopPhrases ?? []).map(normalizeInterruptionText).filter(Boolean);
   const explicitStop = explicitPhrases.includes(text);
-  const acknowledgement = acknowledgements.has(text);
+  const callCheck = !explicitStop && (options.callCheckPhrases ?? []).map(normalizeInterruptionText).includes(text);
+  const acknowledgement = !explicitStop && !callCheck && acknowledgements.has(text);
   const wordCount = meaningfulWordCount(text);
   const minimumWords = Number.isInteger(options.minimumWords) ? options.minimumWords : 2;
   return {
@@ -20,8 +21,9 @@ export function interruptionDecision(value, options = {}) {
     wordCount,
     explicitStop,
     acknowledgement,
-    confirmed: explicitStop || (!acknowledgement && wordCount >= minimumWords),
-    reason: explicitStop ? 'explicit_stop' : acknowledgement ? 'acknowledgement'
+    callCheck,
+    confirmed: explicitStop || (!acknowledgement && !callCheck && wordCount >= minimumWords),
+    reason: explicitStop ? 'explicit_stop' : callCheck ? 'call_check' : acknowledgement ? 'acknowledgement'
       : wordCount >= minimumWords ? 'transcript_confirmed' : 'insufficient_words',
   };
 }

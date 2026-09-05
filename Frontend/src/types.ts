@@ -146,6 +146,8 @@ export interface VoiceAgent {
   interruptionMinWords?: number;
   interruptionAcknowledgements?: string[];
   interruptionStopPhrases?: string[];
+  callCheckPhrases?: string[];
+  callCheckResponse?: string;
   preCallProvider?: string;
   preCallPrompt?: string;
   preCallApiActive?: boolean;

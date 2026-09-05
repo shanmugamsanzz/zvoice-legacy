@@ -234,10 +234,51 @@ stt.publish({ type: 'partial_transcript', text: 'சரி', language: 'ta', isF
 await new Promise((resolve) => setTimeout(resolve, 400));
 assert.equal(orchestrator.controller.state, 'thinking', 'short acknowledgement must not interrupt active output');
 stt.publish({ type: 'speech_started' });
+await new Promise((resolve) => setTimeout(resolve, 400));
+assert.equal(orchestrator.controller.state, 'thinking', 'Duration alone must wait for transcript when phrase rules are configured');
+stt.publish({ type: 'partial_transcript', text: 'சொல்லுங்க', isFinal: false });
+// An unrecognized single word still cannot override the minimum word threshold.
+assert.equal(orchestrator.controller.state, 'thinking');
+stt.publish({ type: 'partial_transcript', text: 'different question', language: 'en', isFinal: false });
 await waitFor(() => orchestrator.controller.state === 'listening', 'Barge-in did not restore listening');
 assert.ok(llm.cancelled > 0);
 assert.ok(tts.cancelled > 0);
-assert.ok(audioEngine.cancelled.includes('caller_barge_in_sustained'));
+assert.ok(audioEngine.cancelled.includes('caller_barge_in_transcript'));
+
+// A call check is spoken directly, saved in the transcript, and bypasses KB/LLM.
+profile.agent.settings.callCheckPhrases = ['hello', 'கேக்குதா'];
+profile.agent.settings.callCheckResponse = 'ஆமா, கேக்குது. சொல்லுங்க.';
+llm.wasCancelled = false;
+const beforeSlowCheck = llm.requests.length;
+stt.publish({ type: 'final_transcript', text: 'slow request', isFinal: true });
+await waitFor(() => llm.requests.length > beforeSlowCheck, 'Call-check interruption test did not start');
+const beforeCheckLlm = llm.requests.length;
+const beforeCheckKb = knowledgeQueries.length;
+stt.publish({ type: 'final_transcript', text: 'கேக்குதா', isFinal: true });
+await waitFor(() => tts.texts.includes(profile.agent.settings.callCheckResponse), 'Configured call-check response was not spoken');
+await waitFor(() => orchestrator.controller.state === 'listening', 'Call check did not return to listening');
+assert.equal(llm.requests.length, beforeCheckLlm);
+assert.equal(knowledgeQueries.length, beforeCheckKb);
+assert.ok(audioEngine.cancelled.includes('caller_call_check'), 'Call check must clear prior output before replying');
+assert.equal(transcript.find((entry) => entry.text === profile.agent.settings.callCheckResponse).answerSources[0].label, 'Agent call-check response');
+
+// The same one-word acknowledgement is a real answer when the agent is listening.
+profile.agent.settings.interruptionAcknowledgements.push('yes');
+const beforeYes = transcript.length;
+stt.publish({ type: 'final_transcript', text: 'yes', isFinal: true });
+await waitFor(() => transcript.length >= beforeYes + 2, 'One-word answer was incorrectly ignored while listening');
+await waitFor(() => orchestrator.controller.state === 'listening', 'One-word answer did not finish');
+
+llm.wasCancelled = false;
+stt.publish({ type: 'final_transcript', text: 'slow request', isFinal: true });
+await waitFor(() => orchestrator.controller.state === 'thinking', 'Stop test did not start');
+const beforeStopLlm = llm.requests.length;
+stt.publish({ type: 'partial_transcript', text: 'stop', isFinal: false });
+await waitFor(() => orchestrator.controller.state === 'listening', 'Single-word stop did not interrupt');
+stt.publish({ type: 'final_transcript', text: 'stop', isFinal: true });
+await waitFor(() => transcript.some((entry) => entry.text === 'stop'), 'Stop phrase was not saved');
+await waitFor(() => orchestrator.controller.state === 'listening', 'Stop phrase did not leave the agent listening');
+assert.equal(llm.requests.length, beforeStopLlm, 'Pure stop requests must not generate another LLM reply');
 
 llm.wasCancelled = false;
 const transcriptCountBeforeGoodbye = transcript.length;

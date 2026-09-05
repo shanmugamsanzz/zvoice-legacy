@@ -26,6 +26,9 @@ assert.equal(explicitStop.confirmed, true);
 
 const configuredStop = interruptionDecision('please pause now', { explicitStopPhrases: ['please pause now'] });
 assert.equal(configuredStop.explicitStop, true);
+const punctuationOnly = interruptionDecision('...', { acknowledgements: ['...'], callCheckPhrases: ['?'] });
+assert.equal(punctuationOnly.callCheck, false, 'Punctuation-only speech must not trigger a call-check reply');
+assert.equal(punctuationOnly.acknowledgement, false);
 
 const rules = { acknowledgements: ['ஆமா', 'hmm', 'சொல்லுங்க'], explicitStopPhrases: ['stop', 'ஒரு நிமிஷம்'], callCheckPhrases: ['கேக்குதா', 'hello'], minimumWords: 2 };
 assert.equal(interruptionDecision('ஆமா!', rules).confirmed, false);

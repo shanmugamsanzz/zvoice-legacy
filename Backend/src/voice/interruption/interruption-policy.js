@@ -9,10 +9,10 @@ export function meaningfulWordCount(value) {
 
 export function interruptionDecision(value, options = {}) {
   const text = normalizeInterruptionText(value);
-  const acknowledgements = new Set((options.acknowledgements ?? []).map(normalizeInterruptionText));
+  const acknowledgements = new Set((options.acknowledgements ?? []).map(normalizeInterruptionText).filter(Boolean));
   const explicitPhrases = (options.explicitStopPhrases ?? []).map(normalizeInterruptionText).filter(Boolean);
   const explicitStop = explicitPhrases.includes(text);
-  const callCheck = !explicitStop && (options.callCheckPhrases ?? []).map(normalizeInterruptionText).includes(text);
+  const callCheck = !explicitStop && (options.callCheckPhrases ?? []).map(normalizeInterruptionText).filter(Boolean).includes(text);
   const acknowledgement = !explicitStop && !callCheck && acknowledgements.has(text);
   const wordCount = meaningfulWordCount(text);
   const minimumWords = Number.isInteger(options.minimumWords) ? options.minimumWords : 2;

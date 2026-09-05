@@ -270,7 +270,25 @@ assert.equal(transcript.find((entry) => entry.text === profile.agent.settings.ca
 
 // The same one-word acknowledgement is a real answer when the agent is listening.
 profile.agent.settings.interruptionAcknowledgements.push('yes');
+// STT can deliver the final acknowledgement after the agent finishes playback.
+// It still belongs to overlapping speech and must not create an extra response.
+let releasePlayback;
+const originalDrain = audioEngine.drainOutput;
+audioEngine.drainOutput = () => new Promise((resolve) => { releasePlayback = resolve; });
+stt.publish({ type: 'final_transcript', text: 'explain appointment', isFinal: true });
+await waitFor(() => releasePlayback && orchestrator.controller.state === 'speaking', 'Delayed acknowledgement setup did not reach playback');
+const beforeDelayedAck = llm.requests.length;
+stt.publish({ type: 'speech_started' });
+stt.publish({ type: 'partial_transcript', text: 'yes', isFinal: false });
+stt.publish({ type: 'speech_ended' });
+audioEngine.drainOutput = originalDrain;
+releasePlayback();
+await waitFor(() => orchestrator.controller.state === 'listening', 'Playback did not finish before delayed STT final');
+stt.publish({ type: 'final_transcript', text: 'yes', isFinal: true });
+await new Promise((resolve) => setTimeout(resolve, 50));
+assert.equal(llm.requests.length, beforeDelayedAck, 'Delayed overlapping acknowledgement must not become a new user turn');
 const beforeYes = transcript.length;
+stt.publish({ type: 'speech_started' });
 stt.publish({ type: 'final_transcript', text: 'yes', isFinal: true });
 await waitFor(() => transcript.length >= beforeYes + 2, 'One-word answer was incorrectly ignored while listening');
 await waitFor(() => orchestrator.controller.state === 'listening', 'One-word answer did not finish');

@@ -123,6 +123,7 @@ export class RealtimeConversationOrchestrator {
     this.bargeInText = '';
     this.bargeInStartedAt = 0;
     this.callerSpeechActive = false;
+    this.utteranceOverlappedAgent = null;
     this.listeners = [];
     this.runtimeMetrics = { knowledge: [], tools: [], latency: {} };
     this.llmCircuitBreaker = new LlmCircuitBreaker();
@@ -310,6 +311,7 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     if (event.type === 'speech_started') {
+      this.utteranceOverlappedAgent = [callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state);
       this.#clearInactivity();
       if ([callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state)) {
         this.#startBargeInConfirmation();
@@ -317,6 +319,7 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     if (event.type === 'partial_transcript') {
+      this.utteranceOverlappedAgent ??= [callStates.GREETING, callStates.THINKING, callStates.SPEAKING].includes(this.controller.state);
       await this.#considerTranscriptInterruption(event.text, false);
       return;
     }
@@ -327,8 +330,16 @@ export class RealtimeConversationOrchestrator {
       return;
     }
     if (event.type !== 'final_transcript') return;
+    const overlappedAgent = this.utteranceOverlappedAgent;
+    this.utteranceOverlappedAgent = null;
     this.#clearInactivity();
     const phraseDecision = interruptionDecision(event.text, this.#interruptionOptions());
+    if (!phraseDecision.text || (phraseDecision.acknowledgement && overlappedAgent === true)) {
+      this.callerSpeechActive = false;
+      this.#clearBargeInTimer();
+      this.#armInactivity();
+      return;
+    }
     if (phraseDecision.explicitStop || phraseDecision.callCheck) {
       this.log.info({ stage: 'conversation.phrase_rule', callId: this.call.id, reason: phraseDecision.reason }, 'Configured speech phrase matched');
       await this.#cancelActive(phraseDecision.explicitStop ? 'caller_explicit_stop' : 'caller_call_check');

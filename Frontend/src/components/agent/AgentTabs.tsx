@@ -174,6 +174,7 @@ interface KnowledgeDocumentApiData {
     status: string;
     pageCount: number | null;
     chunkCount: number;
+    recordCount: number;
     createdAt: string;
   } | null;
   processingJob: {
@@ -586,6 +587,20 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const saveAgent = async () => {
     if (isReadOnly || saving) return;
     if (!sttModelId || !llmModelId || !ttsModelId) { setError('Connected STT, LLM and TTS models are required.'); return; }
+    if (!agent.name.trim()) { setError('Agent name is required.'); return; }
+    if (!agent.prompt.trim()) { setError('Agent prompt is required.'); return; }
+    const selectedStt = models.find((model) => model.id === sttModelId && model.providerType === 'stt');
+    const selectedLlm = models.find((model) => model.id === llmModelId && model.providerType === 'llm');
+    const selectedTts = models.find((model) => model.id === ttsModelId && model.providerType === 'tts');
+    if (!selectedStt || !selectedLlm || !selectedTts) {
+      setError('A selected model is no longer available. Refresh models and select STT, LLM and TTS again.');
+      return;
+    }
+    if (phoneNumberId && !phoneNumbers.some((phone) => phone.id === phoneNumberId && phone.status === 'active')) {
+      setError('The selected phone number is no longer assigned. Select an active phone number or None.');
+      return;
+    }
+    const configuredVoiceId = modelVoiceId(selectedTts);
     setSaving(true); setError('');
     try {
       const {
@@ -597,7 +612,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
         name: agent.name, description: agent.description || null, goal: agent.goal || null,
         language: agent.language || 'English (US)', usageDirection: agent.agentUsage || 'both', status: agent.status,
         phoneNumberId: phoneNumberId || null, sttModelId, llmModelId, ttsModelId,
-        voiceId: agent.voiceId, prompt: agent.prompt, welcomeMessage: agent.welcomeMessage || null,
+        voiceId: configuredVoiceId, prompt: agent.prompt, welcomeMessage: agent.welcomeMessage || null,
         temperature: agent.temperature, interruptionSensitivity: agent.interruptionSensitivity,
         silenceTimeoutMs: agent.silenceTimeout, inactivityTimeoutSeconds: agent.inactivityTimeout ?? 5,
         settings: agentSettings,
@@ -805,7 +820,6 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       [documentType]: { name: file.name, size: file.size, type: file.type },
     }));
     setKnowledgeFileErrors((current) => ({ ...current, [documentType]: undefined }));
-    window.setTimeout(() => { void uploadKnowledgePdf(documentType); }, 0);
   };
 
   const removeKnowledgePdf = (documentType: KnowledgeDocumentType) => {
@@ -958,7 +972,11 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const reviewDocument = knowledgeDocuments.find((document) => document.id === reviewDocumentId);
   const versionDocument = knowledgeDocuments.find((document) => document.id === versionDocumentId);
   const modelVoiceId = (model: ProviderModelOption) => {
-    const configured = model.settings.voiceId ?? model.settings.voice_id ?? model.settings.voice;
+    const configured = Object.entries(model.settings).find(([key, value]) => (
+      key.replace(/[^a-z0-9]/giu, '').toLowerCase() === 'voiceid'
+      && typeof value === 'string'
+      && value.trim()
+    ))?.[1] ?? model.settings.voice;
     return typeof configured === 'string' && configured.trim() ? configured : model.modelKey;
   };
   const renderModelParameters = (model: ProviderModelOption | undefined) => {
@@ -2748,11 +2766,11 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
 
                   {(processing || document.processingJob) && <div className="mt-3"><div className="mb-1.5 flex items-center justify-between text-[9px] font-bold text-slate-400"><span>{processing ? 'Processing' : knowledgeStatusLabel(document.processingJob?.status ?? document.status)}</span><span>{progress}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-200"><div className={`h-full rounded-full transition-all duration-500 ${document.status === 'failed' ? 'bg-red-500' : 'bg-gradient-to-r from-violet-500 to-pink-500'}`} style={{ width: `${progress}%` }} /></div></div>}
 
-                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[9px] font-semibold text-slate-400"><span>{document.currentVersion?.pageCount ?? 0} pages</span><span>{document.currentVersion?.chunkCount ?? 0} chunks</span><span>Attempt {document.processingJob?.attemptCount ?? 0}/{document.processingJob?.maxAttempts ?? 0}</span><span>Uploaded {new Date(document.createdAt).toLocaleString()}</span></div>
+                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[9px] font-semibold text-slate-400"><span>{document.currentVersion?.pageCount ?? 0} pages</span><span>{document.documentType === 'general_knowledge' ? `${document.currentVersion?.chunkCount ?? 0} chunks` : `${document.currentVersion?.recordCount ?? 0} records`}</span><span>Attempt {document.processingJob?.attemptCount ?? 0}/{document.processingJob?.maxAttempts ?? 0}</span><span>Uploaded {new Date(document.createdAt).toLocaleString()}</span></div>
                   {(document.status === 'failed' || errorMessage) && <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-[10px] font-semibold text-red-700">{errorMessage || 'Document processing failed. Select the PDF again to retry with a new upload.'}</div>}
                   {document.status === 'review_required' && <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-[10px] font-semibold text-amber-700">Extraction completed. Developer review is required before publishing.</div>}
                   {document.status === 'deleting' && <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">{deletionJob?.status === 'failed' ? <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />}<span className="text-[10px] font-semibold">{deletionJob?.status === 'failed' ? `Cleanup failed: ${deletionJob.errorMessage || 'The backend retained this job for reconciliation.'}` : `Deleting every version, extracted record, B2 object and Qdrant vector (${deletionJob?.progress ?? 0}%).`}</span></div>}
-                  <div className="mt-3 flex flex-wrap justify-end gap-2"><button type="button" onClick={() => { setVersionDocumentId(document.id); setReviewDocumentId(null); }} disabled={document.status === 'deleting'} className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-[10px] font-bold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50">Version History</button>{['review_required', 'ready'].includes(document.status) && <button type="button" onClick={() => { setReviewDocumentId(document.id); setVersionDocumentId(null); }} className="rounded-lg bg-violet-600 px-3 py-2 text-[10px] font-bold text-white transition hover:bg-violet-700">{document.status === 'ready' ? 'Review Approved Records' : 'Review Extracted Records'}</button>}{!isReadOnly && !['deleting', 'deleted'].includes(document.status) && <button type="button" onClick={() => void deleteKnowledgeDocument(document)} disabled={deletingKnowledgeDocumentIds.includes(document.id)} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-[10px] font-bold text-red-600 transition hover:bg-red-50 disabled:cursor-wait disabled:opacity-50">{deletingKnowledgeDocumentIds.includes(document.id) ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}{deletingKnowledgeDocumentIds.includes(document.id) ? 'Starting deletion...' : 'Delete Document'}</button>}</div>
+                  <div className="mt-3 flex flex-wrap justify-end gap-2"><button type="button" onClick={() => { setVersionDocumentId(document.id); setReviewDocumentId(null); }} disabled={document.status === 'deleting'} className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-[10px] font-bold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50">Version History</button>{['review_required', 'ready'].includes(document.status) && <button type="button" onClick={() => { setReviewDocumentId(document.id); setVersionDocumentId(null); }} className="rounded-lg bg-violet-600 px-3 py-2 text-[10px] font-bold text-white transition hover:bg-violet-700">{document.status === 'ready' ? 'Review Approved Records' : 'Review Extracted Records'}</button>}{!isReadOnly && document.status === 'deleting' && deletionJob?.status === 'failed' && <button type="button" onClick={() => void deleteKnowledgeDocument(document)} disabled={deletingKnowledgeDocumentIds.includes(document.id)} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-[10px] font-bold text-red-600 transition hover:bg-red-50 disabled:cursor-wait disabled:opacity-50"><RefreshCw className={`h-3 w-3 ${deletingKnowledgeDocumentIds.includes(document.id) ? 'animate-spin' : ''}`} />{deletingKnowledgeDocumentIds.includes(document.id) ? 'Retrying cleanup...' : 'Retry Cleanup'}</button>}{!isReadOnly && !['deleting', 'deleted'].includes(document.status) && <button type="button" onClick={() => void deleteKnowledgeDocument(document)} disabled={deletingKnowledgeDocumentIds.includes(document.id)} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-[10px] font-bold text-red-600 transition hover:bg-red-50 disabled:cursor-wait disabled:opacity-50">{deletingKnowledgeDocumentIds.includes(document.id) ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}{deletingKnowledgeDocumentIds.includes(document.id) ? 'Starting deletion...' : 'Delete Document'}</button>}</div>
                 </article>;
               })}</div>}
             </section>}

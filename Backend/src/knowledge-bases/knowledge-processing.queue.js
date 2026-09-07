@@ -3,6 +3,12 @@ import { getQueue } from '../queues/queue.registry.js';
 
 export async function enqueueKnowledgeProcessingJob({ processingJobId, maxAttempts = 3 }) {
   const queue = getQueue('knowledge-processing');
+  const existing = await queue.getJob(processingJobId);
+  if (existing) {
+    const state = await existing.getState();
+    if (state === 'failed' || state === 'completed') await existing.remove();
+    else return { id: existing.id };
+  }
   const job = await queue.add(
     'extract-pdf-text',
     { processingJobId },

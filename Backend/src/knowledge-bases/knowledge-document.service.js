@@ -32,7 +32,10 @@ function mapDocument(row) {
       status: row.version_status,
       checksumSha256: row.content_sha256,
       pageCount: row.page_count,
-      chunkCount: row.chunk_count,
+      chunkCount: Number(row.document_type === 'general_knowledge'
+        ? row.chunk_count ?? 0
+        : row.record_count ?? row.chunk_count ?? 0),
+      recordCount: Number(row.record_count ?? row.chunk_count ?? 0),
       createdAt: row.version_created_at,
     } : null,
     processingJob: row.processing_job_id ? {
@@ -56,6 +59,25 @@ function mapDocument(row) {
 const documentSelect = `
   SELECT d.*, v.id AS version_id, v.version_number, v.status AS version_status,
     v.content_sha256, v.page_count, v.chunk_count, v.created_at AS version_created_at,
+    CASE d.document_type
+      WHEN 'faq' THEN (
+        SELECT COUNT(*) FROM faq_entries r
+        WHERE r.tenant_id = d.tenant_id AND r.document_version_id = v.id
+      )
+      WHEN 'catalog' THEN (
+        SELECT COUNT(*) FROM structured_items r
+        WHERE r.tenant_id = d.tenant_id AND r.document_version_id = v.id
+      )
+      WHEN 'workflow_rules' THEN (
+        SELECT COUNT(*) FROM workflow_rules r
+        WHERE r.tenant_id = d.tenant_id AND r.document_version_id = v.id
+      )
+      WHEN 'conversation_script' THEN (
+        SELECT COUNT(*) FROM conversation_flows r
+        WHERE r.tenant_id = d.tenant_id AND r.document_version_id = v.id
+      )
+      ELSE COALESCE(v.chunk_count, 0)
+    END AS record_count,
     latest_job.*
   FROM knowledge_documents d
   LEFT JOIN knowledge_document_versions v
@@ -313,7 +335,11 @@ function mapVersion(row) {
     checksumSha256: row.content_sha256,
     sizeBytes: Number(row.size_bytes),
     pageCount: row.page_count,
-    chunkCount: row.chunk_count,
+    chunkCount: Number(row.document_type === 'general_knowledge'
+      ? row.chunk_count ?? 0
+      : row.record_count ?? row.chunk_count ?? 0),
+    recordCount: Number(row.record_count ?? row.chunk_count ?? 0),
+    documentType: row.document_type,
     embeddingModel: row.embedding_model,
     embeddingDimensions: row.embedding_dimensions,
     processedAt: row.processed_at,
@@ -331,10 +357,19 @@ export function listKnowledgeDocumentVersions(
   return contextRunner(auth, async (client) => {
     await documentRow(client, auth, knowledgeBaseId, documentId);
     const result = await client.query(
-      `SELECT * FROM knowledge_document_versions
-        WHERE tenant_id=$1 AND knowledge_base_id=$2 AND document_id=$3
-          AND deleted_at IS NULL AND status <> 'deleted'
-        ORDER BY version_number DESC`,
+      `SELECT v.*, d.document_type,
+          CASE d.document_type
+            WHEN 'faq' THEN (SELECT COUNT(*) FROM faq_entries r WHERE r.tenant_id=v.tenant_id AND r.document_version_id=v.id)
+            WHEN 'catalog' THEN (SELECT COUNT(*) FROM structured_items r WHERE r.tenant_id=v.tenant_id AND r.document_version_id=v.id)
+            WHEN 'workflow_rules' THEN (SELECT COUNT(*) FROM workflow_rules r WHERE r.tenant_id=v.tenant_id AND r.document_version_id=v.id)
+            WHEN 'conversation_script' THEN (SELECT COUNT(*) FROM conversation_flows r WHERE r.tenant_id=v.tenant_id AND r.document_version_id=v.id)
+            ELSE COALESCE(v.chunk_count, 0)
+          END AS record_count
+         FROM knowledge_document_versions v
+         JOIN knowledge_documents d ON d.tenant_id=v.tenant_id AND d.id=v.document_id
+        WHERE v.tenant_id=$1 AND v.knowledge_base_id=$2 AND v.document_id=$3
+          AND v.deleted_at IS NULL AND v.status <> 'deleted'
+        ORDER BY v.version_number DESC`,
       [auth.tenantId, knowledgeBaseId, documentId],
     );
     return result.rows.map(mapVersion);

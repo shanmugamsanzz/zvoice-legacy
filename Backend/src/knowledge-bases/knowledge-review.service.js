@@ -168,16 +168,42 @@ async function reviewContent(client, auth, document) {
     const items = await client.query(
       `SELECT * FROM structured_items WHERE tenant_id = $1 AND document_version_id = $2 ORDER BY display_order, created_at, id`, values,
     );
+    const attributes = await client.query(
+      `SELECT item_id, attribute_key, value
+         FROM structured_item_attributes
+        WHERE tenant_id = $1 AND document_version_id = $2
+        ORDER BY display_order, created_at, id`, values,
+    );
+    const attributesByItem = new Map();
+    for (const attribute of attributes.rows) {
+      const itemAttributes = attributesByItem.get(attribute.item_id) ?? {};
+      itemAttributes[attribute.attribute_key] = attribute.value;
+      attributesByItem.set(attribute.item_id, itemAttributes);
+    }
     return {
       catalogs: catalogs.rows.map((row) => ({
         ...commonRecord(row, 'catalog'), catalogType: row.catalog_type,
         name: row.name, description: row.description, defaultCurrency: row.default_currency,
+        commercialRules: row.metadata?.commercialRules ?? [],
       })),
-      records: items.rows.map((row) => ({
-        ...commonRecord(row, 'catalog_item'), catalogId: row.catalog_id,
-        name: row.name, description: row.description, price: row.price === null ? null : Number(row.price),
-        currency: row.currency, displayOrder: row.display_order, sourceText: row.source_text,
-      })),
+      records: items.rows.map((row) => {
+        const itemAttributes = attributesByItem.get(row.id) ?? {};
+        const category = itemAttributes.category ?? {};
+        const reservedKeys = new Set(['aliases', 'category', 'relationships', 'selection-rules', 'commercial-rules']);
+        return {
+          ...commonRecord(row, 'catalog_item'), catalogId: row.catalog_id,
+          itemKey: row.item_key, name: row.name, description: row.description,
+          price: row.price === null ? null : Number(row.price),
+          currency: row.currency, displayOrder: row.display_order, sourceText: row.source_text,
+          category: category.name ?? null, categoryKey: category.key ?? null,
+          aliases: itemAttributes.aliases ?? [],
+          attributes: Object.fromEntries(
+            Object.entries(itemAttributes).filter(([key]) => !reservedKeys.has(key)),
+          ),
+          relationships: itemAttributes.relationships ?? {},
+          selectionRules: itemAttributes['selection-rules'] ?? {},
+        };
+      }),
     };
   }
   if (document.document_type === 'workflow_rules') {

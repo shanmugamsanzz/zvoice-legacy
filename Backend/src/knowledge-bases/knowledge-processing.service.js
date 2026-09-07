@@ -106,27 +106,43 @@ async function persistCatalog(client, job, result) {
   const catalog = await client.query(
     `INSERT INTO structured_catalogs (
        tenant_id, knowledge_base_id, document_id, document_version_id,
-       catalog_type, name, default_currency, status
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft') RETURNING id`,
+       catalog_type, name, description, default_currency, metadata, status
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, 'draft') RETURNING id`,
     [
       job.tenant_id, job.knowledge_base_id, job.document_id, job.document_version_id,
-      result.catalog.catalogType, result.catalog.name, currency,
+      result.catalog.catalogType, result.catalog.name, result.catalog.description,
+      result.catalog.defaultCurrency ?? currency,
+      JSON.stringify({ commercialRules: result.catalog.commercialRules ?? [] }),
     ],
   );
   for (const record of result.records) {
-    await client.query(
+    const item = await client.query(
       `INSERT INTO structured_items (
          tenant_id, knowledge_base_id, catalog_id, document_id, document_version_id,
-         name, price, currency, display_order, status, source_text,
+         item_key, name, description, price, currency, display_order, status, source_text,
          source_page_start, source_page_end
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft', $10, $11, $12)`,
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'draft', $12, $13, $14)
+       RETURNING id`,
       [
         job.tenant_id, job.knowledge_base_id, catalog.rows[0].id,
-        job.document_id, job.document_version_id, record.name, record.price,
-        record.currency, record.displayOrder, record.sourceText,
+        job.document_id, job.document_version_id, record.itemKey, record.name,
+        record.description, record.price, record.currency, record.displayOrder, record.sourceText,
         record.sourcePageStart, record.sourcePageEnd,
       ],
     );
+    for (const attribute of record.attributes ?? []) {
+      await client.query(
+        `INSERT INTO structured_item_attributes (
+           tenant_id, knowledge_base_id, item_id, document_id, document_version_id,
+           attribute_key, display_name, value, display_order
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)`,
+        [
+          job.tenant_id, job.knowledge_base_id, item.rows[0].id,
+          job.document_id, job.document_version_id, attribute.key, attribute.name,
+          JSON.stringify(attribute.value), attribute.displayOrder,
+        ],
+      );
+    }
   }
 }
 
@@ -330,6 +346,13 @@ export async function processKnowledgeJob(jobId, dependencies = defaultDependenc
     const extraction = await runtime.extract(source.body, job.mime_type);
     await updateProgress(jobId, 60, runtime.contextRunner);
     const category = processExtractedCategory(job.document_type, extraction);
+    if (job.document_type !== 'general_knowledge' && category.recordCount === 0) {
+      throw new AppError(
+        422,
+        category.warnings[0] ?? 'No valid structured records were detected',
+        'KNOWLEDGE_STRUCTURED_RECORDS_EMPTY',
+      );
+    }
     const key = extractedTextKey(job.b2_object_key);
     const body = Buffer.from(JSON.stringify({
       schemaVersion: 1,

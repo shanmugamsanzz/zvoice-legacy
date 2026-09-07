@@ -97,12 +97,21 @@ async function networkApiRequest<T>(path: string, init: ApiRequestInit = {}, ret
   let measurementFinished = false;
   const token = getAccessToken();
   const headers = new Headers(init.headers);
-  const { zeaCache: _zeaCache, ...requestInit } = init;
+  const { zeaCache, ...requestInit } = init;
   const isMultipart = typeof FormData !== 'undefined' && init.body instanceof FormData;
   if (init.body && !isMultipart && !headers.has('content-type')) headers.set('content-type', 'application/json');
   if (token) headers.set('authorization', `Bearer ${token}`);
+  if (zeaCache === 'bypass') {
+    headers.set('cache-control', 'no-cache');
+    headers.set('pragma', 'no-cache');
+  }
   try {
-    const response = await request(`${API_BASE_URL}${path}`, { ...requestInit, headers, credentials: 'include' });
+    const response = await request(`${API_BASE_URL}${path}`, {
+      ...requestInit,
+      cache: zeaCache === 'bypass' ? 'no-store' : requestInit.cache,
+      headers,
+      credentials: 'include',
+    });
     measuredResponse = response;
     if (response.status === 401 && retry) {
       finishApiMeasurement(measurement, response);
@@ -155,32 +164,42 @@ export async function apiBlobRequest(path: string, retry = true): Promise<Blob> 
 
 export function uploadApiFormData<T>(path: string, body: FormData, onProgress: (percent: number) => void) {
   return new Promise<T>((resolve, reject) => {
-    const request = new XMLHttpRequest();
-    request.open('POST', `${API_BASE_URL}${path}`);
-    request.withCredentials = true;
-    request.timeout = REQUEST_TIMEOUT_MS;
-    const token = getAccessToken();
-    if (token) request.setRequestHeader('authorization', `Bearer ${token}`);
-    request.upload.onprogress = (event) => {
-      if (event.lengthComputable && event.total > 0) {
-        onProgress(Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100))));
-      }
+    const send = (retry: boolean) => {
+      const request = new XMLHttpRequest();
+      request.open('POST', `${API_BASE_URL}${path}`);
+      request.withCredentials = true;
+      request.timeout = REQUEST_TIMEOUT_MS;
+      const token = getAccessToken();
+      if (token) request.setRequestHeader('authorization', `Bearer ${token}`);
+      request.upload.onprogress = (event) => {
+        if (event.lengthComputable && event.total > 0) {
+          onProgress(Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100))));
+        }
+      };
+      request.onload = () => {
+        if (request.status === 401 && retry) {
+          void refreshAccessToken().then(() => send(false)).catch((error) => {
+            setAccessToken(null, true);
+            reject(error);
+          });
+          return;
+        }
+        let envelope: ApiEnvelope<T> | null = null;
+        try { envelope = JSON.parse(request.responseText) as ApiEnvelope<T>; } catch { /* handled below */ }
+        if (request.status < 200 || request.status >= 300 || !envelope?.success) {
+          reject(new Error(apiErrorMessage(envelope?.error?.message) || apiErrorMessage(envelope?.error?.details)
+            || `Request failed (${request.status})`));
+          return;
+        }
+        onProgress(100);
+        void invalidateApiResource(path).finally(() => resolve(envelope!.data));
+      };
+      request.onerror = () => reject(new Error('Could not connect to the Zea Voice backend.'));
+      request.ontimeout = () => reject(new Error('The backend did not respond before the request timeout.'));
+      request.onabort = () => reject(new DOMException('Request aborted', 'AbortError'));
+      request.send(body);
     };
-    request.onload = () => {
-      let envelope: ApiEnvelope<T> | null = null;
-      try { envelope = JSON.parse(request.responseText) as ApiEnvelope<T>; } catch { /* handled below */ }
-      if (request.status < 200 || request.status >= 300 || !envelope?.success) {
-        reject(new Error(apiErrorMessage(envelope?.error?.message) || apiErrorMessage(envelope?.error?.details)
-          || `Request failed (${request.status})`));
-        return;
-      }
-      onProgress(100);
-      void invalidateApiResource(path).finally(() => resolve(envelope!.data));
-    };
-    request.onerror = () => reject(new Error('Could not connect to the Zea Voice backend.'));
-    request.ontimeout = () => reject(new Error('The backend did not respond before the request timeout.'));
-    request.onabort = () => reject(new DOMException('Request aborted', 'AbortError'));
-    request.send(body);
+    send(true);
   });
 }
 

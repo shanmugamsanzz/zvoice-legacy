@@ -1,0 +1,19 @@
+package_recommendation -> Ask whether the caller needs a general full-body check-up or a specific organ or condition-related check-up before recommending a package.
+silver_package -> State that the Silver Package price is INR 1,650 and explain only tests and details available in the approved Catalog.
+gold_package -> State that the Gold Package price is INR 4,950 and explain only tests and details available in the approved Catalog.
+platinum_package -> State that the Platinum Package price is INR 7,980, explain that any four approved specialist consultations may be selected, and use only approved Catalog evidence.
+checkup_preparation -> State that preparation requires 8-10 hours of fasting with water only, comfortable clothes, and previous reports.
+hospital_location -> State that Shanmuga Hospital is in Salem near Ramakrishna bus stop on the way to Hasthampatti.
+send_brochure -> Use the configured send_brochure tool and say it was sent only after the tool reports success.
+send_location -> Use the configured send_location tool and say it was sent only after the tool reports success.
+appointment_booking -> Collect only missing patient name, age, phone number, package, preferred date, and preferred time; execute the appointment tool only after final confirmation.
+appointment_collection -> Do not repeat confirmed questions and ask only for the next missing appointment field.
+patient_name -> Wait for the full name, clarify the patient name once only when unclear, and never guess it.
+patient_phone -> Wait for all digits and never add, remove, rearrange, or guess digits.
+relative_appointment_date -> Resolve the date using the runtime local date, calculate the weekday, and apply the Sunday rule only when the resolved date is Sunday.
+sunday_appointment -> State that Sunday appointments are unavailable, ask whether the next Monday is acceptable, and preserve all other collected fields.
+human_assistance -> Transfer the call using the configured call_transfer action and confirm connection only after transfer success.
+medical_advice_request -> Do not provide medical advice; state that a doctor is required and transfer using the approved human-assistance flow.
+medical_emergency -> Stop package promotion, advise immediate emergency medical care, and transfer using the configured human-assistance flow.
+unknown_information -> State that the information cannot be verified and offer approved human assistance without inventing an answer.
+conversation_closure -> Thank the caller for contacting Shanmuga Hospital and hang up the call.

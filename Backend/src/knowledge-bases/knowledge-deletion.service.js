@@ -54,10 +54,26 @@ export async function requestDeleteKnowledgeDocument(
       [auth.tenantId, knowledgeBaseId, documentId, auth.workspaceId],
     );
     if (priorJob.rowCount) {
+      const prior = priorJob.rows[0];
+      if (['failed', 'cancelled'].includes(prior.status)) {
+        await client.query(
+          `UPDATE knowledge_processing_jobs
+              SET status='queued', progress=0, attempt_count=0, bullmq_job_id=NULL,
+                  started_at=NULL, completed_at=NULL, error_code=NULL, error_message=NULL
+            WHERE tenant_id=$1 AND id=$2`,
+          [auth.tenantId, prior.id],
+        );
+        return {
+          id: documentId, deleted: true,
+          job: { id: prior.id, maxAttempts: prior.max_attempts },
+          cleanupStatus: 'queued',
+          alreadyRequested: false,
+        };
+      }
       return {
         id: documentId, deleted: true,
-        job: { id: priorJob.rows[0].id, maxAttempts: priorJob.rows[0].max_attempts },
-        cleanupStatus: priorJob.rows[0].status,
+        job: { id: prior.id, maxAttempts: prior.max_attempts },
+        cleanupStatus: prior.status,
         alreadyRequested: true,
       };
     }
@@ -73,12 +89,15 @@ export async function requestDeleteKnowledgeDocument(
       [auth.tenantId, knowledgeBaseId, documentId, auth.workspaceId],
     );
     if (!document.rowCount) throw new AppError(404, 'Knowledge document was not found', 'KNOWLEDGE_DOCUMENT_NOT_FOUND');
-    const published = ['published', 'partially_failed'].includes(document.rows[0].knowledge_base_status);
+    const published = document.rows[0].knowledge_base_status === 'published'
+      || (document.rows[0].knowledge_base_status === 'partially_failed'
+        && Number(document.rows[0].publication_revision) > 0);
     let reindexRevision = null;
     if (published) {
       reindexRevision = document.rows[0].publication_revision + 1;
       await client.query(
-        `UPDATE knowledge_bases SET publication_revision=$3, status='published'
+        `UPDATE knowledge_bases SET publication_revision=$3, status='published',
+            published_at=COALESCE(published_at, now())
           WHERE tenant_id=$1 AND id=$2`,
         [auth.tenantId, knowledgeBaseId, reindexRevision],
       );
@@ -170,10 +189,25 @@ export async function requestDeleteKnowledgeBase(
       [auth.tenantId, knowledgeBaseId, auth.workspaceId],
     );
     if (priorJob.rowCount) {
+      const prior = priorJob.rows[0];
+      if (['failed', 'cancelled'].includes(prior.status)) {
+        await client.query(
+          `UPDATE knowledge_processing_jobs
+              SET status='queued', progress=0, attempt_count=0, bullmq_job_id=NULL,
+                  started_at=NULL, completed_at=NULL, error_code=NULL, error_message=NULL
+            WHERE tenant_id=$1 AND id=$2`,
+          [auth.tenantId, prior.id],
+        );
+        return {
+          id: knowledgeBaseId, deleted: true, immediate: false, alreadyRequested: false,
+          cleanupStatus: 'queued',
+          job: { id: prior.id, maxAttempts: prior.max_attempts },
+        };
+      }
       return {
         id: knowledgeBaseId, deleted: true, immediate: false, alreadyRequested: true,
-        cleanupStatus: priorJob.rows[0].status,
-        job: { id: priorJob.rows[0].id, maxAttempts: priorJob.rows[0].max_attempts },
+        cleanupStatus: prior.status,
+        job: { id: prior.id, maxAttempts: prior.max_attempts },
       };
     }
     const knowledgeBase = await client.query(

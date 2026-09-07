@@ -16,6 +16,15 @@ export const notFoundHandler = (request, _response, next) => {
 
 export const errorHandler = (error, request, response, _next) => {
   if (error instanceof AppError) {
+    if (request.path === '/agents' && request.method === 'POST') {
+      request.log?.warn({
+        stage: 'agent.create_failed',
+        statusCode: error.statusCode,
+        errorCode: error.code,
+        details: error.details,
+        requestId: request.id,
+      }, `Agent creation failed: ${error.message}`);
+    }
     if (request.path?.startsWith('/webhooks/plivo')) {
       request.log?.warn({
         icon: '❌',

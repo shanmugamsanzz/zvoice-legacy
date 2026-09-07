@@ -40,7 +40,15 @@ interface KnowledgeReviewPanelProps {
 }
 
 type FieldKind = 'text' | 'textarea' | 'number' | 'select' | 'checkbox' | 'json-object' | 'json-array';
-interface ReviewField { key: string; label: string; kind: FieldKind; required?: boolean; integer?: boolean; nullable?: boolean }
+interface ReviewField {
+  key: string;
+  label: string;
+  kind: FieldKind;
+  required?: boolean;
+  integer?: boolean;
+  nullable?: boolean;
+  readOnly?: boolean;
+}
 
 const fieldsByKind: Record<ReviewRecord['kind'], ReviewField[]> = {
   faq: [
@@ -54,13 +62,21 @@ const fieldsByKind: Record<ReviewRecord['kind'], ReviewField[]> = {
     { key: 'name', label: 'Catalog Name', kind: 'text', required: true },
     { key: 'description', label: 'Description', kind: 'textarea', nullable: true },
     { key: 'defaultCurrency', label: 'Default Currency', kind: 'text', nullable: true },
+    { key: 'commercialRules', label: 'Commercial Rules', kind: 'json-array', readOnly: true },
   ],
   catalog_item: [
+    { key: 'itemKey', label: 'Item Key', kind: 'text', readOnly: true },
     { key: 'name', label: 'Item / Package Name', kind: 'text', required: true },
+    { key: 'category', label: 'Category', kind: 'text', readOnly: true },
+    { key: 'categoryKey', label: 'Category Key', kind: 'text', readOnly: true },
     { key: 'description', label: 'Description', kind: 'textarea', nullable: true },
     { key: 'price', label: 'Price', kind: 'number', nullable: true },
     { key: 'currency', label: 'Currency', kind: 'text', nullable: true },
     { key: 'displayOrder', label: 'Display Order', kind: 'number', integer: true },
+    { key: 'aliases', label: 'Aliases', kind: 'json-array', readOnly: true },
+    { key: 'attributes', label: 'Attributes', kind: 'json-object', readOnly: true },
+    { key: 'relationships', label: 'Relationships', kind: 'json-object', readOnly: true },
+    { key: 'selectionRules', label: 'Selection Rules', kind: 'json-object', readOnly: true },
   ],
   workflow_rule: [
     { key: 'name', label: 'Rule Name', kind: 'text', required: true },
@@ -118,6 +134,7 @@ function ReviewRecordCard({ record, readOnly, onChanged }: { record: ReviewRecor
     try {
       const payload: Record<string, unknown> = {};
       for (const field of fieldsByKind[record.kind]) {
+        if (field.readOnly) continue;
         const value = draft[field.key];
         if (field.kind === 'checkbox') payload[field.key] = Boolean(value);
         else if (field.kind === 'number') {
@@ -163,12 +180,12 @@ function ReviewRecordCard({ record, readOnly, onChanged }: { record: ReviewRecor
       const fullWidth = field.kind === 'textarea' || field.kind === 'json-object' || field.kind === 'json-array';
       return <label key={field.key} className={fullWidth ? 'md:col-span-2' : ''}><span className="mb-1 block text-[9px] font-black uppercase tracking-wider text-slate-400">{field.label}{field.required ? ' *' : ''}</span>
         {field.kind === 'textarea' || field.kind === 'json-object' || field.kind === 'json-array'
-          ? <textarea value={String(value ?? '')} onChange={(event) => setDraft((current) => ({ ...current, [field.key]: event.target.value }))} disabled={readOnly || busy} rows={field.kind === 'textarea' ? 4 : 5} className={`w-full resize-y rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none focus:border-violet-400 disabled:bg-slate-50 ${field.kind.startsWith('json') ? 'font-mono' : 'font-medium'}`} />
+          ? <textarea value={String(value ?? '')} onChange={(event) => setDraft((current) => ({ ...current, [field.key]: event.target.value }))} disabled={readOnly || field.readOnly || busy} rows={field.kind === 'textarea' ? 4 : 5} className={`w-full resize-y rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none focus:border-violet-400 disabled:bg-slate-50 ${field.kind.startsWith('json') ? 'font-mono' : 'font-medium'}`} />
           : field.kind === 'select'
             ? <select value={String(value ?? 'both')} onChange={(event) => setDraft((current) => ({ ...current, [field.key]: event.target.value }))} disabled={readOnly || busy} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold outline-none focus:border-violet-400 disabled:bg-slate-50"><option value="inbound">Inbound</option><option value="outbound">Outbound</option><option value="both">Both</option></select>
             : field.kind === 'checkbox'
               ? <input type="checkbox" checked={Boolean(value)} onChange={(event) => setDraft((current) => ({ ...current, [field.key]: event.target.checked }))} disabled={readOnly || busy} className="h-4 w-4 rounded border-slate-300 text-violet-600" />
-              : <input type={field.kind === 'number' ? 'number' : 'text'} value={String(value ?? '')} onChange={(event) => setDraft((current) => ({ ...current, [field.key]: event.target.value }))} disabled={readOnly || busy} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold outline-none focus:border-violet-400 disabled:bg-slate-50" />}
+              : <input type={field.kind === 'number' ? 'number' : 'text'} value={String(value ?? '')} onChange={(event) => setDraft((current) => ({ ...current, [field.key]: event.target.value }))} disabled={readOnly || field.readOnly || busy} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold outline-none focus:border-violet-400 disabled:bg-slate-50" />}
       </label>;
     })}</div>
     {error && <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-[10px] font-semibold text-red-700"><AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{error}</div>}

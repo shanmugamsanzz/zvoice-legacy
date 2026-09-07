@@ -54,35 +54,152 @@ function priceFromLine(text) {
   return { price: numeric, currency, name };
 }
 
+function catalogKey(value, fallback = 'catalog-item') {
+  return String(value ?? '').normalize('NFKC').toLocaleLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/gu, '').slice(0, 160) || fallback;
+}
+
+function catalogObject(value, warnings, label, lineNumber) {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+  } catch {}
+  warnings.push(`${label} on Catalog line ${lineNumber} must be a JSON object`);
+  return {};
+}
+
+function catalogMetadata(text) {
+  const result = {};
+  for (const segment of text.split('|')) {
+    const match = segment.match(/^\s*([A-Z][A-Z0-9 _-]*)\s*[:=]\s*(.*?)\s*$/iu);
+    if (!match) continue;
+    const key = match[1].toUpperCase().replace(/[\s-]+/gu, '_');
+    result[key] = match[2].trim();
+  }
+  return result;
+}
+
 function parseCatalog(extraction) {
   const lines = nonEmptyLines(extraction);
   const items = [];
+  const warnings = [];
+  const commercialRules = [];
+  const catalog = {
+    catalogType: 'document_catalog', name: 'Extracted catalog',
+    description: null, defaultCurrency: null,
+  };
+  let category = null;
   for (let index = 0; index < lines.length; index += 1) {
-    const parsed = priceFromLine(lines[index].text);
-    if (!parsed) continue;
-    const fallbackName = index > 0 ? lines[index - 1].text : `Item ${items.length + 1}`;
+    const metadata = catalogMetadata(lines[index].text);
+    if (metadata.CATALOG) {
+      catalog.name = metadata.CATALOG.slice(0, 200);
+      catalog.catalogType = catalogKey(metadata.CATALOG_TYPE ?? 'document_catalog').replaceAll('-', '_');
+      catalog.description = metadata.DESCRIPTION?.slice(0, 50000) ?? null;
+      catalog.defaultCurrency = metadata.DEFAULT_CURRENCY?.toUpperCase() ?? null;
+      continue;
+    }
+    if (metadata.CATEGORY) {
+      category = {
+        name: metadata.CATEGORY.slice(0, 240),
+        key: catalogKey(metadata.CATEGORY_KEY ?? metadata.CATEGORY),
+        parentKey: metadata.PARENT_CATEGORY_KEY ? catalogKey(metadata.PARENT_CATEGORY_KEY) : null,
+        aliases: String(metadata.ALIASES ?? '').split(',').map((value) => value.trim()).filter(Boolean),
+        description: metadata.DESCRIPTION?.slice(0, 50000) ?? null,
+        attributes: catalogObject(metadata.ATTRIBUTES, warnings, 'ATTRIBUTES', index + 1),
+      };
+      continue;
+    }
+    if (metadata.COMMERCIAL_RULE) {
+      commercialRules.push({
+        key: catalogKey(metadata.RULE_KEY ?? metadata.COMMERCIAL_RULE),
+        name: metadata.COMMERCIAL_RULE.slice(0, 200),
+        description: metadata.DESCRIPTION?.slice(0, 50000) ?? null,
+      });
+      continue;
+    }
+    if (!metadata.ITEM) continue;
+    const explicitPrice = metadata.PRICE === undefined
+      ? null : Number(String(metadata.PRICE).replaceAll(',', ''));
+    if (metadata.PRICE !== undefined && (!Number.isFinite(explicitPrice) || explicitPrice < 0)) {
+      warnings.push(`PRICE on Catalog line ${index + 1} must be a non-negative number`);
+      continue;
+    }
+    const aliases = [
+      ...String(metadata.ALIASES ?? '').split(',').map((value) => value.trim()).filter(Boolean),
+      ...(category?.aliases ?? []), category?.name,
+    ].filter(Boolean);
+    const itemAttributes = catalogObject(metadata.ATTRIBUTES, warnings, 'ATTRIBUTES', index + 1);
+    const attributes = Object.entries(itemAttributes).map(([key, value], attributeIndex) => ({
+      key: catalogKey(key, `attribute-${attributeIndex + 1}`),
+      name: key,
+      value,
+      displayOrder: attributeIndex,
+    }));
+    attributes.push(
+      { key: 'aliases', name: 'Aliases', value: [...new Set(aliases)], displayOrder: attributes.length },
+      { key: 'category', name: 'Category', value: category, displayOrder: attributes.length + 1 },
+      {
+        key: 'relationships', name: 'Relationships',
+        value: catalogObject(metadata.RELATIONSHIPS, warnings, 'RELATIONSHIPS', index + 1),
+        displayOrder: attributes.length + 2,
+      },
+      {
+        key: 'selection-rules', name: 'Selection Rules',
+        value: catalogObject(metadata.SELECTION_RULES, warnings, 'SELECTION_RULES', index + 1),
+        displayOrder: attributes.length + 3,
+      },
+    );
     items.push({
-      name: parsed.name || fallbackName,
-      price: parsed.price,
-      currency: parsed.currency,
+      itemKey: catalogKey(metadata.ITEM_KEY ?? metadata.ITEM, `item-${items.length + 1}`),
+      name: metadata.ITEM.slice(0, 240),
+      description: metadata.DESCRIPTION?.slice(0, 50000) ?? null,
+      price: explicitPrice,
+      currency: metadata.CURRENCY?.toUpperCase() ?? (explicitPrice === null ? null : catalog.defaultCurrency),
+      attributes,
       sourceText: lines[index].text,
       sourcePageStart: lines[index].pageNumber,
       sourcePageEnd: lines[index].pageNumber,
       displayOrder: items.length,
     });
   }
+  for (const item of items) {
+    item.attributes.push({
+      key: 'commercial-rules', name: 'Commercial Rules', value: commercialRules,
+      displayOrder: item.attributes.length,
+    });
+  }
   return {
-    catalog: { catalogType: 'document_catalog', name: 'Extracted catalog' },
+    catalog: { ...catalog, commercialRules },
     records: items,
-    warnings: items.length ? [] : ['No price-bearing catalog items were detected'],
+    warnings: [...warnings, ...(!items.length ? ['No valid catalog items were detected'] : [])],
   };
 }
 
 function parseWorkflowRules(extraction) {
   const records = [];
-  for (const line of nonEmptyLines(extraction)) {
-    const arrow = line.text.match(/^(.+?)\s*(?:->|=>)\s*(.+)$/);
-    const conditional = line.text.match(/^if\s+(.+?)\s+then\s+(.+)$/i);
+  const lines = extraction.pages.flatMap((page) => page.text
+    .replace(/<br\s*\/?>|<\/(?:p|div|li|tr|h[1-6])\s*>/giu, '\n')
+    .replace(/\\r?\\n/gu, '\n')
+    .replace(/&(?:rarr|#8594|#x0*2192);/giu, '\u2192')
+    .replace(/&(?:rArr|#8658|#x0*21d2);/gu, '\u21d2')
+    .replace(/&gt;|&#62;|&#x0*3e;/giu, '>')
+    .replace(/&lt;|&#60;|&#x0*3c;/giu, '<')
+    .replace(/&(?:nbsp|#160|#x0*a0|#32|#x0*20);/giu, ' ')
+    .replace(/\s+(?=IF\s+)/gu, '\n')
+    .split(/\n/gu)
+    .map((text) => ({ pageNumber: page.pageNumber, text })));
+  for (const line of lines) {
+    const normalized = line.text
+      .replace(/<[^>]+>/gu, ' ')
+      .replace(/[\u200B-\u200D\u2060\uFEFF]/gu, '')
+      .replace(/^\s*(?:[-*#]|\u2022)+\s*/u, '')
+      .replace(/^\s*["'`]+|["'`*]+\s*$/gu, '')
+      .replace(/\s+/gu, ' ')
+      .trim();
+    const arrow = normalized.match(/^(.+?)\s*(?:->|=>|\u2192|\u21d2)\s*(.+)$/u);
+    const conditional = normalized.match(/^(?:rule\s*:\s*)?if\s+(.+?)\s+then\s+(.+)$/i);
     const match = arrow ?? conditional;
     if (!match) continue;
     const intent = match[1].trim();
@@ -97,7 +214,7 @@ function parseWorkflowRules(extraction) {
       actionType,
       actionConfig: { instruction: action },
       responseTemplate: actionType === 'respond' ? action : null,
-      sourceText: line.text,
+      sourceText: normalized,
       sourcePageStart: line.pageNumber,
       sourcePageEnd: line.pageNumber,
       priority: records.length * 10 + 100,

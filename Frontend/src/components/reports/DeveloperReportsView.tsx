@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity, Calendar, CheckCircle2, ChevronLeft, ChevronRight, Clock, Download,
   Eye, FileSpreadsheet, Filter, LoaderCircle, Phone, PhoneIncoming, PhoneOutgoing,
@@ -44,6 +44,8 @@ interface CallRecord {
   cost: number;
   currency: string;
   recordingAvailable: boolean;
+  recordingStatus: 'processing' | 'stored' | 'failed' | null;
+  callSource: string | null;
   transcript?: TranscriptEntry[];
 }
 
@@ -207,8 +209,10 @@ export function DeveloperReportsView({
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState('');
   const [recordingUrl, setRecordingUrl] = useState('');
+  const [recordingExtension, setRecordingExtension] = useState('mp3');
   const [recordingLoading, setRecordingLoading] = useState(false);
   const [recordingError, setRecordingError] = useState('');
+  const recordingRequestRef = useRef(0);
   const [exportMessage, setExportMessage] = useState('');
 
   const refresh = useCallback(() => setRefreshToken((value) => value + 1), []);
@@ -280,27 +284,50 @@ export function DeveloperReportsView({
   };
 
   const openDetails = async (call: CallRecord) => {
+    const requestId = ++recordingRequestRef.current;
     if (recordingUrl) URL.revokeObjectURL(recordingUrl);
-    setRecordingUrl(''); setRecordingError(''); setRecordingLoading(false);
+    setRecordingUrl(''); setRecordingExtension('mp3'); setRecordingError(''); setRecordingLoading(false);
     setSelected(call); setDetailsLoading(true); setDetailsError('');
     try {
       const detail = await apiRequest<CallRecord>(`/calls/${call.id}`, { zeaCache: 'reload' });
+      if (recordingRequestRef.current !== requestId) return;
       setSelected(detail);
-      if (detail.recordingAvailable) {
+      if (detail.recordingAvailable || detail.recordingStatus === 'processing') {
         setRecordingLoading(true);
         try {
+          let current = detail;
+          for (let attempt = 0; !current.recordingAvailable && attempt < 30; attempt += 1) {
+            if (current.recordingStatus === 'failed') throw new Error('Recording storage failed. Please try a new call.');
+            await new Promise((resolve) => window.setTimeout(resolve, 5000));
+            if (recordingRequestRef.current !== requestId) return;
+            current = await apiRequest<CallRecord>(`/calls/${call.id}`, { zeaCache: 'reload' });
+            if (recordingRequestRef.current !== requestId) return;
+            setSelected(current);
+          }
+          if (!current.recordingAvailable) throw new Error('Recording is still processing. Please reopen this call shortly.');
           const blob = await apiBlobRequest(`/calls/${call.id}/recording`);
+          if (recordingRequestRef.current !== requestId) return;
+          setRecordingExtension(['audio/wav', 'audio/x-wav'].includes(blob.type) ? 'wav' : 'mp3');
           setRecordingUrl(URL.createObjectURL(blob));
         } catch (requestError) {
-          setRecordingError(requestError instanceof Error ? requestError.message : 'Recording could not be loaded');
-        } finally { setRecordingLoading(false); }
+          if (recordingRequestRef.current === requestId) {
+            setRecordingError(requestError instanceof Error ? requestError.message : 'Recording could not be loaded');
+          }
+        } finally {
+          if (recordingRequestRef.current === requestId) setRecordingLoading(false);
+        }
       }
     } catch (requestError) {
-      setDetailsError(requestError instanceof Error ? requestError.message : 'Call details could not be loaded');
-    } finally { setDetailsLoading(false); }
+      if (recordingRequestRef.current === requestId) {
+        setDetailsError(requestError instanceof Error ? requestError.message : 'Call details could not be loaded');
+      }
+    } finally {
+      if (recordingRequestRef.current === requestId) setDetailsLoading(false);
+    }
   };
 
   const closeDetails = () => {
+    recordingRequestRef.current += 1;
     if (recordingUrl) URL.revokeObjectURL(recordingUrl);
     setRecordingUrl(''); setRecordingError(''); setSelected(null);
   };
@@ -389,7 +416,7 @@ export function DeveloperReportsView({
         <div className="grid grid-cols-2 gap-3">{[['Agent', selected.agentName || '—'], ['Timestamp', timestamp(selected.startedAt, true)], ['Direction', selected.direction.toUpperCase()], ['Outcome', statusLabel[selected.status]], ['Duration', duration(selected.durationSeconds)], ['Sentiment', selected.sentiment || 'Not analyzed']].map(([label, value]) => <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4"><p className="text-[9px] font-black uppercase tracking-wider text-slate-400">{label}</p><p className="mt-2 break-words text-xs font-black text-slate-800">{value}</p></div>)}</div>
         <div className="divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white p-5 text-xs">{[['From', selected.fromNumber], ['To', selected.toNumber], ['Agent ID', selected.agentId || '—'], ['Campaign', selected.campaignName || '—'], ['Plivo Call UUID', selected.providerCallId || '—'], ['Internal Call ID', selected.id]].map(([label, value]) => <div key={label} className="flex items-start justify-between gap-5 py-3"><span className="shrink-0 font-black uppercase text-slate-400">{label}</span><span className="break-all text-right font-mono font-bold text-slate-700">{value}</span></div>)}</div>
         <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-4 flex items-center justify-between"><h4 className="text-sm font-black text-slate-800">Transcript</h4><span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">{selected.transcript?.length ?? 0} entries</span></div>{selected.transcript?.length ? <div className="space-y-4">{selected.transcript.map((entry) => <div key={entry.id} className={`flex flex-col ${entry.speaker === 'agent' ? 'items-end' : 'items-start'}`}><span className="mb-1 text-[9px] font-black uppercase tracking-wider text-slate-400">{entry.speaker} · {elapsed(entry.offsetMs)}</span><div className={`max-w-[88%] rounded-2xl px-4 py-3 text-xs font-semibold leading-relaxed ${entry.speaker === 'agent' ? 'rounded-tr-none bg-gradient-to-r from-violet-600 to-pink-500 text-white' : entry.speaker === 'system' ? 'border border-amber-200 bg-amber-50 text-amber-800' : 'rounded-tl-none border border-slate-200 bg-slate-50 text-slate-800'}`}>{entry.text}</div>{entry.speaker === 'agent' && <div className="mt-1 flex max-w-[88%] flex-wrap justify-end gap-1">{(entry.answerSources?.length ? entry.answerSources : [{ type: 'model' as const, label: 'Source unavailable (older transcript)' }]).map((source, index) => <span key={`${source.label}-${index}`} className="rounded-full border border-slate-200 bg-white px-2 py-1 text-[9px] font-bold text-slate-500" title={source.knowledgeBaseName ?? undefined}>Source: {source.documentName ?? source.label}{source.pageNumber ? ` · Page ${source.pageNumber}` : ''}</span>)}</div>}</div>)}</div> : <p className="py-8 text-center text-xs font-semibold text-slate-400">No finalized transcript entries were saved for this call.</p>}</div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-3 flex items-center gap-2"><Download className="h-4 w-4 text-emerald-500" /><h4 className="text-sm font-black text-slate-800">Call Recording</h4></div>{recordingLoading ? <div className="flex items-center gap-2 py-3 text-xs font-bold text-slate-500"><LoaderCircle className="h-4 w-4 animate-spin text-emerald-500" />Loading private recording from B2...</div> : recordingUrl ? <><audio controls preload="metadata" src={recordingUrl} className="w-full" /><a href={recordingUrl} download={`call-${selected.id}.mp3`} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-[10px] font-black text-emerald-700"><Download className="h-3.5 w-3.5" />Download recording</a></> : recordingError ? <p className="text-xs font-bold text-rose-600">{recordingError}</p> : <div className="flex items-center gap-2 text-xs font-semibold text-slate-500"><Activity className="h-4 w-4 text-slate-400" />No recording is available for this call.</div>}</div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5"><div className="mb-3 flex items-center gap-2"><Download className="h-4 w-4 text-emerald-500" /><h4 className="text-sm font-black text-slate-800">Call Recording</h4></div>{recordingLoading ? <div className="flex items-center gap-2 py-3 text-xs font-bold text-slate-500"><LoaderCircle className="h-4 w-4 animate-spin text-emerald-500" />Loading private recording from B2...</div> : recordingUrl ? <><audio controls preload="metadata" src={recordingUrl} className="w-full" /><a href={recordingUrl} download={`call-${selected.id}.${recordingExtension}`} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-[10px] font-black text-emerald-700"><Download className="h-3.5 w-3.5" />Download recording</a></> : recordingError ? <p className="text-xs font-bold text-rose-600">{recordingError}</p> : <div className="flex items-center gap-2 text-xs font-semibold text-slate-500"><Activity className="h-4 w-4 text-slate-400" />No recording is available for this call.</div>}</div>
       </div><div className="border-t border-slate-200 bg-white p-5 text-right"><button onClick={closeDetails} className="rounded-xl bg-slate-900 px-5 py-2.5 text-xs font-bold text-white">Close</button></div></div></div>}
   </div>;
 }

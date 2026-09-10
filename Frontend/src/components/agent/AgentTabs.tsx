@@ -442,6 +442,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   const [showKnowledgeBaseDeleteDialog, setShowKnowledgeBaseDeleteDialog] = useState(false);
   const [knowledgeDeletionJobs, setKnowledgeDeletionJobs] = useState<Record<string, KnowledgeDeletionJob>>({});
   const knowledgeFileObjects = useRef<Record<KnowledgeDocumentType, File | null>>(emptyKnowledgeFileObjects());
+  const activeKnowledgeUploads = useRef<Set<KnowledgeDocumentType>>(new Set());
   const [knowledgeFiles, setKnowledgeFiles] = useState<Record<KnowledgeDocumentType, SelectedKnowledgeFile | null>>(() => emptyKnowledgeFiles());
   const [knowledgeFileErrors, setKnowledgeFileErrors] = useState<Partial<Record<KnowledgeDocumentType, string>>>({});
   const [draggedKnowledgeCategory, setDraggedKnowledgeCategory] = useState<KnowledgeDocumentType | null>(null);
@@ -797,7 +798,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
   };
 
   const selectKnowledgePdf = (documentType: KnowledgeDocumentType, file: File | null) => {
-    if (!file) return;
+    if (!file) return null;
     let validationError = '';
     const extension = file.name.toLowerCase().match(/\.(pdf|txt)$/)?.[1];
     const validMime = !file.type
@@ -812,7 +813,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       knowledgeFileObjects.current[documentType] = null;
       setKnowledgeFiles((current) => ({ ...current, [documentType]: null }));
       setKnowledgeFileErrors((current) => ({ ...current, [documentType]: validationError }));
-      return;
+      return null;
     }
     knowledgeFileObjects.current[documentType] = file;
     setKnowledgeFiles((current) => ({
@@ -820,6 +821,7 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       [documentType]: { name: file.name, size: file.size, type: file.type },
     }));
     setKnowledgeFileErrors((current) => ({ ...current, [documentType]: undefined }));
+    return file;
   };
 
   const removeKnowledgePdf = (documentType: KnowledgeDocumentType) => {
@@ -828,9 +830,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
     setKnowledgeFileErrors((current) => ({ ...current, [documentType]: undefined }));
   };
 
-  const uploadKnowledgePdf = async (documentType: KnowledgeDocumentType) => {
-    const file = knowledgeFileObjects.current[documentType];
-    if (!selectedKnowledgeBase || !file || isReadOnly || uploadingKnowledgeCategories[documentType]) return;
+  const uploadKnowledgePdf = async (documentType: KnowledgeDocumentType, selectedFile?: File) => {
+    const file = selectedFile ?? knowledgeFileObjects.current[documentType];
+    if (!selectedKnowledgeBase || !file || isReadOnly || activeKnowledgeUploads.current.has(documentType)) return;
+    activeKnowledgeUploads.current.add(documentType);
     const overlayStartedAt = performance.now();
     const category = knowledgeDocumentCategories.find((item) => item.type === documentType);
     const form = new FormData();
@@ -849,12 +852,16 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       // Let React commit the portal before XMLHttpRequest starts. This keeps the
       // loading screen visible even when the request succeeds or fails quickly.
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-      await uploadApiFormData<KnowledgeDocumentApiData>(
+      const uploadedDocument = await uploadApiFormData<KnowledgeDocumentApiData>(
         `/knowledge-bases/${selectedKnowledgeBase.id}/documents`,
         form,
         (percent) => setKnowledgeUploadProgress((current) => ({ ...current, [documentType]: percent })),
       );
       setKnowledgeUploadProgress((current) => ({ ...current, [documentType]: 100 }));
+      setKnowledgeDocuments((current) => [
+        uploadedDocument,
+        ...current.filter((document) => document.id !== uploadedDocument.id),
+      ]);
       knowledgeFileObjects.current[documentType] = null;
       setKnowledgeFiles((current) => ({ ...current, [documentType]: null }));
       setKnowledgeBases((current) => current.map((knowledgeBase) => knowledgeBase.id === selectedKnowledgeBase.id
@@ -864,17 +871,18 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
       // upload response. The upload endpoint can return before processing and
       // version fields are populated.
       setKnowledgeDocumentPollTick((value) => value + 1);
-      showKnowledgeSuccess(`${category?.title ?? 'Knowledge'} PDF uploaded and queued for processing.`);
+      showKnowledgeSuccess(`${category?.title ?? 'Knowledge'} document uploaded and queued for processing.`);
     } catch (requestError) {
       setKnowledgeFileErrors((current) => ({
         ...current,
-        [documentType]: requestError instanceof Error ? requestError.message : 'PDF could not be uploaded',
+        [documentType]: requestError instanceof Error ? requestError.message : 'Document could not be uploaded',
       }));
     } finally {
       const remainingOverlayMs = Math.max(0, 700 - (performance.now() - overlayStartedAt));
       if (remainingOverlayMs > 0) {
         await new Promise<void>((resolve) => window.setTimeout(resolve, remainingOverlayMs));
       }
+      activeKnowledgeUploads.current.delete(documentType);
       setUploadingKnowledgeCategories((current) => ({ ...current, [documentType]: false }));
       window.setTimeout(() => setKnowledgeUploadProgress((current) => ({ ...current, [documentType]: undefined })), 600);
     }
@@ -2723,10 +2731,10 @@ export function AgentTabs({ agentId, onSave, onCancel }: AgentTabsProps) {
                     <p className="mt-1 text-[11px] font-medium leading-4 text-slate-500">{category.description}</p>
                     <p className="mt-2 text-[10px] leading-4 text-slate-400">{category.examples}</p>
 
-                    <label onDragOver={(event) => { if (disabled) return; event.preventDefault(); setDraggedKnowledgeCategory(category.type); }} onDragLeave={() => setDraggedKnowledgeCategory(null)} onDrop={(event) => { if (disabled) return; event.preventDefault(); setDraggedKnowledgeCategory(null); selectKnowledgePdf(category.type, event.dataTransfer.files[0] ?? null); }}
+                    <label onDragOver={(event) => { if (disabled) return; event.preventDefault(); setDraggedKnowledgeCategory(category.type); }} onDragLeave={() => setDraggedKnowledgeCategory(null)} onDrop={(event) => { if (disabled) return; event.preventDefault(); setDraggedKnowledgeCategory(null); const selected = selectKnowledgePdf(category.type, event.dataTransfer.files[0] ?? null); if (selected) void uploadKnowledgePdf(category.type, selected); }}
                       className={`mt-4 flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed px-3 py-4 text-center transition ${disabled ? 'cursor-not-allowed border-slate-200 bg-slate-50 opacity-60' : dragging ? 'border-violet-500 bg-violet-50' : 'border-slate-300 bg-slate-50 hover:border-violet-400 hover:bg-violet-50/40'}`}>
-                      <Upload className="h-5 w-5 text-slate-400" /><span className="mt-2 text-[11px] font-bold text-slate-600">{file ? 'Replace selected file' : 'Select or drop PDF/TXT'}</span><span className="mt-1 text-[9px] font-medium text-slate-400">PDF or TXT · Maximum {formatFileSize(KNOWLEDGE_PDF_MAX_BYTES)}</span>
-                      <input key={`${selectedKnowledgeBase.id}-${category.type}-${file?.name ?? 'empty'}`} type="file" accept=".pdf,.txt,application/pdf,text/plain" disabled={disabled} className="sr-only" onChange={(event) => selectKnowledgePdf(category.type, event.target.files?.[0] ?? null)} />
+                      <Upload className="h-5 w-5 text-slate-400" /><span className="mt-2 text-[11px] font-bold text-slate-600">{uploading ? 'Uploading selected file' : file ? 'Select a replacement file' : 'Select or drop PDF/TXT to upload'}</span><span className="mt-1 text-[9px] font-medium text-slate-400">PDF or TXT · Maximum {formatFileSize(KNOWLEDGE_PDF_MAX_BYTES)}</span>
+                      <input key={`${selectedKnowledgeBase.id}-${category.type}-${file?.name ?? 'empty'}`} type="file" accept=".pdf,.txt,application/pdf,text/plain" disabled={disabled} className="sr-only" onChange={(event) => { const selected = selectKnowledgePdf(category.type, event.target.files?.[0] ?? null); if (selected) void uploadKnowledgePdf(category.type, selected); }} />
                     </label>
 
                     <div className="mt-3">

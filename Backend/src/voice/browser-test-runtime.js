@@ -1,8 +1,10 @@
 import { attachRealtimeConversationOrchestrator } from './realtime-conversation-orchestrator.js';
 import { appendTranscriptEntry } from '../calls/call.service.js';
 import { withAuthServiceContext } from '../infrastructure/database-context.js';
+import { attachBrowserCallRecording } from './browser-call-recording.service.js';
 
 export function attachBrowserTestRuntime(session) {
+  attachBrowserCallRecording(session);
   const send = (message) => {
     if (session.socket.readyState === 1) session.socket.send(JSON.stringify(message));
   };

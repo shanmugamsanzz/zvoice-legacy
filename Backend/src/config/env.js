@@ -33,6 +33,7 @@ const envSchema = z.object({
   REDIS_COMMAND_TIMEOUT_MS: z.coerce.number().int().min(500).max(60000).default(5000),
   REDIS_MAX_RETRY_DELAY_MS: z.coerce.number().int().min(100).max(30000).default(3000),
   QUEUE_PREFIX: z.string().min(1).default('zea-voice'),
+  KNOWLEDGE_QUEUE_PREFIX: z.string().min(1).optional(),
   QUEUE_CONGESTED_WAITING: z.coerce.number().int().min(1).default(20),
   QUEUE_CRITICAL_WAITING: z.coerce.number().int().min(2).default(100),
   QUEUE_CONGESTED_WAIT_SECONDS: z.coerce.number().int().min(1).default(60),

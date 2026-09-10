@@ -7,6 +7,9 @@ import { assertRuntimeAdapterCompatibility } from './providers/registry.js';
 import { createVoiceMediaToken } from './plivo-answer.service.js';
 import { voiceCallOwnership } from './call-ownership.service.js';
 
+// Keep browser calls compatible with databases that still enforce strict E.164 columns.
+const browserTestNumber = '+10000000000';
+
 export async function createBrowserTestCall(auth, agentId, dependencies = {}) {
   const context = dependencies.contextRunner ?? withTenantContext;
   const agent = await context(auth, async (client) => {
@@ -32,8 +35,9 @@ export async function createBrowserTestCall(auth, agentId, dependencies = {}) {
   try {
     await (dependencies.writeContext ?? withAuthServiceContext)((client) => client.query(`INSERT INTO call_sessions
       (id,tenant_id,workspace_id,provider_call_id,agent_id,agent_name,from_number,to_number,direction,status,provider_metadata)
-      VALUES($1,$2,$3,$4,$5,$6,'browser','browser',$7,'connected',$8::jsonb)`, [
-      call.id, auth.tenantId, auth.workspaceId, call.providerCallId, agentId, profile.agent.name, direction,
+      VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,'connected',$9::jsonb)`, [
+      call.id, auth.tenantId, auth.workspaceId, call.providerCallId, agentId, profile.agent.name,
+      browserTestNumber, direction,
       JSON.stringify({ source: 'browser-test', createdBy: auth.userId,
         connectDeadline: new Date(Date.now() + 60_000).toISOString(),
         preCall: { status: 'skipped', context: { customer_name: 'Browser test' } } }),

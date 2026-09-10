@@ -24,6 +24,7 @@ function contactName(row) {
 }
 
 function mapCall(row, includeTranscript = false) {
+  const recordingMetadata = row.provider_metadata?.recording ?? {};
   const call = {
     id: row.id, companyId: row.tenant_id, workspaceId: row.workspace_id,
     companyName: row.company_name, providerCallId: row.provider_call_id,
@@ -37,6 +38,8 @@ function mapCall(row, includeTranscript = false) {
       ? row.duration_seconds : number(row.live_duration_seconds),
     cost: number(row.cost), currency: row.currency,
     recordingAvailable: Boolean(row.recording_object_key),
+    recordingStatus: recordingMetadata.status ?? (row.recording_object_key ? 'stored' : null),
+    callSource: row.provider_metadata?.source ?? null,
     createdAt: row.created_at, updatedAt: row.updated_at,
   };
   if (includeTranscript) call.transcript = row.transcript ?? [];

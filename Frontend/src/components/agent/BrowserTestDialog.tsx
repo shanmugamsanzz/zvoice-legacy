@@ -94,7 +94,7 @@ export function BrowserTestDialog({ agent, onClose }: { agent: { id: string; nam
     <div className="my-5 rounded-xl border border-indigo-100 bg-indigo-50 p-4">
       <div className="flex items-center justify-between font-semibold"><span role="status">{status}</span>
         <span className="font-mono">{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</span></div>
-      <p className="mt-2 text-xs text-slate-600">Calls last up to 10 minutes. Transcripts, duration, and provider usage are saved in Reports and included in analytics. Browser audio recordings are not stored.</p>
+      <p className="mt-2 text-xs text-slate-600">Calls last up to 10 minutes. Transcripts, audio recordings, duration, and provider usage are saved privately in Reports and included in analytics.</p>
     </div>
     {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
     <div className="flex gap-3">

@@ -1,0 +1,67 @@
+SHANMUGA HOSPITAL FAQ
+
+QUESTION: What types of health check-up services are available?
+ANSWER: Retrieve the complete approved Catalog hierarchy. Briefly explain every top-level category and mention its child package options, then ask which category or package the caller wants.
+
+QUESTION: Why are you calling?
+ANSWER: Briefly state that the call is to help with approved health check-up package information and appointment booking. Do not claim how the caller's details were obtained unless that information is present in verified runtime context. Then ask one short question about what package information they need.
+
+QUESTION: Is a Master Health Check-Up Package available?
+ANSWER: Yes. Master Health Check-Up Packages is an approved Catalog category, not a single package. Retrieve and present every package inside that category with its approved price, then ask which one the caller wants explained. Never say this category is unavailable merely because it is not an individual Catalog item.
+
+QUESTION: Which packages are included under Master Health Check-Up Packages?
+ANSWER: The Master Health Check-Up Packages category contains Silver Package at INR 1,650, Gold Package at INR 4,950, and Platinum Package at INR 7,980. Use the official English category and package names even in a Tamil response, and ask which package the caller wants explained.
+
+QUESTION: What is the difference between the Silver Package and Gold Package?
+ANSWER: Silver costs INR 1,650 and Gold costs INR 4,950. Both include CBC, Blood Grouping and RH Type, fasting and post-prandial sugar, HBA1C, Urea, Creatinine, Uric Acid, Lipid Profile, Liver Function Test, Urine Routine, ECG, Chest X-Ray, and one Doctor Consultation. Gold additionally includes Calcium, Iron and TIBC, Vitamin D, Vitamin B12, Homocysteine, TSH, T3, T4, Electrolytes, HSCRP, ECHO, USG Abdomen, and Dental Check-up.
+
+QUESTION: What is the difference between the Gold Package and Platinum Package?
+ANSWER: Gold costs INR 4,950 and Platinum costs INR 7,980. Platinum includes the main Gold tests and additionally includes ESR, HIV, HBSAG, HCV, PFT, Apolipoprotein A1 and B, Magnesium, Phosphorus, Carotid Doppler, Ankle Brachial Index, and Diabetic Foot Assessment. Gold includes one Doctor Consultation, while Platinum includes any four approved specialist consultations.
+
+QUESTION: What is the difference between the Silver Package and Platinum Package?
+ANSWER: Silver costs INR 1,650 and Platinum costs INR 7,980. Both include CBC, Blood Grouping and RH Type, fasting and post-prandial sugar, HBA1C, Urea, Creatinine, Uric Acid, Lipid Profile, Liver Function Test, Urine Routine, ECG, and Chest X-Ray. Platinum additionally includes the advanced tests and assessments recorded in its Catalog entry and includes any four approved specialist consultations instead of one Doctor Consultation.
+
+QUESTION: Can you explain both packages?
+ANSWER: Resolve both packages from the immediately preceding comparison or choices. Retrieve both Catalog records and explain each package's price, common inclusions, exact additional tests, and consultation difference. Ask for clarification only when two packages cannot be identified from the conversation.
+
+QUESTION: What options are available for a condition-specific or organ-specific check-up?
+ANSWER: Use the approved Catalog to list every item in the Diabetic Health Check-Up and Organ-Specific Health Check-Up categories, then ask which package the caller wants explained.
+
+QUESTION: What Oncology Screening options are available?
+ANSWER: Use the approved Catalog to list all Premium and Add-on items in the Oncology Screening category, then ask which option the caller wants explained.
+
+QUESTION: What Kids Health Checkup Packages are available?
+ANSWER: Use the approved Catalog to list all items in the Kids Health Checkup Packages category, including its Pediatric, Developmental, Behavioural, IQ, Neonatal, and New Born Hearing options, then ask which option the caller wants explained.
+
+QUESTION: How long should I fast before a health check-up?
+ANSWER: The general preparation guidance is 8 to 10 hours of fasting with water only. Confirm the selected package instructions from the approved Catalog and do not apply fasting to a service unless the approved knowledge supports it.
+
+QUESTION: Can I drink water while fasting?
+ANSWER: Water only is allowed during the approved fasting period.
+
+QUESTION: What should I bring for a health check-up?
+ANSWER: Wear comfortable clothes and bring previous medical reports.
+
+QUESTION: What is the recommended visit time for a Master Health Check-Up?
+ANSWER: The approved recommended visit time is between 8 AM and 11 AM.
+
+QUESTION: Where is Shanmuga Hospital located?
+ANSWER: Shanmuga Hospital is in Salem, near Ramakrishna bus stop, on the way to Hasthampatti.
+
+QUESTION: Can the brochure be sent on WhatsApp?
+ANSWER: The brochure can be sent using the configured brochure action. Preserve the brochure request while collecting only missing action inputs, execute the action when those inputs are confirmed, and describe it as sent only after the action reports verified success. If speech-to-text renders brochure as a similar word, resolve it from the active WhatsApp request or clarify once instead of treating it as the caller's name.
+
+QUESTION: Can the hospital location be sent on WhatsApp?
+ANSWER: The hospital location can be sent using the configured location action. It must be described as sent only after the action reports success.
+
+QUESTION: Can I book a health check-up appointment?
+ANSWER: An appointment can be requested. The agent must collect the missing booking details, confirm them once, and use the configured appointment action.
+
+QUESTION: Can the voice agent provide diagnosis, medicine, treatment, or report interpretation?
+ANSWER: No. Clinical advice and report interpretation require assistance from an approved doctor or human team.
+
+QUESTION: Can I speak with a person or get human assistance?
+ANSWER: Offer the approved tele-caller transfer flow. Say the call is connected to a tele-caller only after the configured transfer action reports verified success.
+
+QUESTION: How are insurance, refunds, complaints, package customization, and doctor availability handled?
+ANSWER: These requests require the approved human-assistance or tele-caller flow.

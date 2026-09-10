@@ -74,7 +74,9 @@ async function loadSemanticRecords(job, contextRunner) {
       `SELECT f.id AS record_id, 'faq'::text AS record_type,
           f.document_id, f.document_version_id, f.usage_direction,
           f.source_page_start, f.question, f.answer,
-          ('Question: ' || f.question || E'\nAnswer: ' || f.answer) AS content
+          ('Question: ' || f.question || E'\nAnswer: ' || f.answer) AS content,
+          NULL::text AS item_key, NULL::text AS item_name,
+          NULL::text AS item_description, NULL::numeric AS price, NULL::text AS currency
          FROM faq_entries f
          JOIN knowledge_documents d
            ON d.tenant_id = f.tenant_id AND d.id = f.document_id
@@ -84,9 +86,33 @@ async function loadSemanticRecords(job, contextRunner) {
           AND f.status = 'approved' AND d.status = 'ready'
           AND v.is_current = true AND v.status = 'ready' AND v.deleted_at IS NULL
        UNION ALL
+       SELECT si.id, 'catalog_item'::text,
+          si.document_id, si.document_version_id, 'both'::agent_usage_direction,
+          si.source_page_start, NULL::text, NULL::text,
+          ('Catalog item: ' || si.name
+            || E'\nItem key: ' || COALESCE(si.item_key, '')
+            || E'\nAliases and category: ' || COALESCE((
+              SELECT string_agg(sa.value::text, ' ' ORDER BY sa.display_order, sa.id)
+                FROM structured_item_attributes sa
+               WHERE sa.tenant_id = si.tenant_id AND sa.item_id = si.id
+                 AND sa.attribute_key IN ('aliases', 'category')
+            ), '')) AS content,
+          si.item_key, si.name, si.description, si.price, si.currency::text
+         FROM structured_items si
+         JOIN structured_catalogs sc
+           ON sc.tenant_id = si.tenant_id AND sc.id = si.catalog_id
+         JOIN knowledge_documents d
+           ON d.tenant_id = si.tenant_id AND d.id = si.document_id
+         JOIN knowledge_document_versions v
+           ON v.tenant_id = si.tenant_id AND v.id = si.document_version_id
+        WHERE si.tenant_id = $1 AND si.knowledge_base_id = $2
+          AND si.status = 'approved' AND sc.status = 'approved' AND d.status = 'ready'
+          AND v.is_current = true AND v.status = 'ready' AND v.deleted_at IS NULL
+       UNION ALL
        SELECT c.id, 'knowledge_chunk'::text,
           c.document_id, c.document_version_id, c.usage_direction,
-          c.source_page_start, NULL::text, NULL::text, c.content
+          c.source_page_start, NULL::text, NULL::text, c.content,
+          NULL::text, NULL::text, NULL::text, NULL::numeric, NULL::text
          FROM knowledge_chunks c
          JOIN knowledge_documents d
            ON d.tenant_id = c.tenant_id AND d.id = c.document_id
@@ -234,6 +260,13 @@ export async function processSemanticIndexJob(jobId, dependencies = defaultDepen
           payload: {
             ...payload,
             ...(record.question ? { question: record.question, answer: record.answer } : {}),
+            ...(record.record_type === 'catalog_item' ? {
+              item_key: record.item_key,
+              item_name: record.item_name,
+              item_description: record.item_description,
+              price: record.price == null ? null : Number(record.price),
+              currency: record.currency,
+            } : {}),
           },
         });
       }

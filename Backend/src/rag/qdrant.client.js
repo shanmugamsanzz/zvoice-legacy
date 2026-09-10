@@ -106,6 +106,7 @@ export async function upsertTenantPoints(tenantId, points) {
 export async function searchTenantPoints(tenantId, vector, {
   knowledgeBases,
   usageDirection,
+  recordTypes = ['FAQ', 'CATALOG_ITEM', 'KNOWLEDGE_CHUNK'],
   limit = env.RAG_RUNTIME_TOP_K,
   scoreThreshold = env.RAG_RUNTIME_MIN_SCORE,
 } = {}) {
@@ -116,6 +117,11 @@ export async function searchTenantPoints(tenantId, vector, {
   if (!Array.isArray(knowledgeBases) || knowledgeBases.length === 0) return [];
   if (!['inbound', 'outbound'].includes(usageDirection)) {
     throw new TypeError('usageDirection must be inbound or outbound');
+  }
+  const allowedRecordTypes = new Set(['FAQ', 'CATALOG_ITEM', 'KNOWLEDGE_CHUNK']);
+  if (!Array.isArray(recordTypes) || !recordTypes.length
+    || recordTypes.some((value) => !allowedRecordTypes.has(value))) {
+    throw new TypeError('recordTypes must contain supported semantic record types');
   }
   if (!Number.isInteger(limit) || limit < 1 || limit > 10) {
     throw new TypeError('limit must be between 1 and 10');
@@ -147,7 +153,7 @@ export async function searchTenantPoints(tenantId, vector, {
         must: [
           { key: 'tenant_id', match: { value: tenant } },
           { key: 'agent_usage', match: { any: [usageDirection.toUpperCase(), 'BOTH'] } },
-          { key: 'record_type', match: { any: ['FAQ', 'KNOWLEDGE_CHUNK'] } },
+          { key: 'record_type', match: { any: recordTypes } },
           { should: revisionConditions },
         ],
       },

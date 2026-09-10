@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { request as httpsRequest } from 'node:https';
+import { Readable } from 'node:stream';
 import { AppError } from '../../../middleware/errors.js';
 import { audioDurationMs } from '../../audio/audio-format.js';
 import {
@@ -21,6 +23,49 @@ function outputFormat(format) {
   const encoding = { pcm_s16le: 'pcm_s16le', mulaw: 'pcm_mulaw' }[format.encoding];
   if (!encoding) throw new AppError(409, `Cartesia TTS cannot stream ${format.encoding}`, 'TTS_AUDIO_FORMAT_UNSUPPORTED');
   return { container: 'raw', encoding, sample_rate: format.sampleRate };
+}
+
+function networkErrorCodes(error) {
+  return [
+    error?.code,
+    error?.cause?.code,
+    ...(Array.isArray(error?.cause?.errors) ? error.cause.errors.map((item) => item?.code) : []),
+  ].filter(Boolean);
+}
+
+function fetchWithIpv4(url, init) {
+  return new Promise((resolve, reject) => {
+    const request = httpsRequest(url, {
+      method: init.method,
+      headers: Object.fromEntries(new Headers(init.headers).entries()),
+      family: 4,
+      signal: init.signal,
+    }, (response) => {
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(response.headers)) {
+        if (Array.isArray(value)) value.forEach((item) => headers.append(name, item));
+        else if (value !== undefined) headers.set(name, value);
+      }
+      resolve(new Response(Readable.toWeb(response), {
+        status: response.statusCode ?? 502,
+        statusText: response.statusMessage,
+        headers,
+      }));
+    });
+    request.once('error', reject);
+    request.end(init.body);
+  });
+}
+
+async function fetchCartesia(fetchImpl, url, init) {
+  try {
+    return await fetchImpl(url, init);
+  } catch (error) {
+    const unreachable = networkErrorCodes(error)
+      .some((code) => code === 'ENETUNREACH' || code === 'EHOSTUNREACH');
+    if (!unreachable || fetchImpl !== globalThis.fetch || new URL(url).protocol !== 'https:') throw error;
+    return fetchWithIpv4(url, init);
+  }
 }
 
 export function resolveCartesiaTtsConfiguration(providerConfig) {
@@ -64,7 +109,7 @@ export function createCartesiaTtsAdapter({ providerConfig, runtimeContext = {} }
           },
         };
         if (configuration.dictionary?.id) body.pronunciation_dict_id = configuration.dictionary.id;
-        const response = await fetchImpl(configuration.endpoint, {
+        const response = await fetchCartesia(fetchImpl, configuration.endpoint, {
           method: 'POST', headers, signal: request.controller.signal, body: JSON.stringify(body),
         });
         await requireAudioResponse(response, providerConfig);

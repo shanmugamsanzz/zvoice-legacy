@@ -20,10 +20,17 @@ const connection = {
 const definitionsByName = new Map(definitions.map((definition) => [definition.name, definition]));
 const queueInstances = new Map();
 
+export function queuePrefixFor(queueName) {
+  if (queueName === 'knowledge-processing') {
+    return env.KNOWLEDGE_QUEUE_PREFIX ?? env.QUEUE_PREFIX;
+  }
+  return env.QUEUE_PREFIX;
+}
+
 export function getQueue(queueName) {
   if (!definitionsByName.has(queueName)) return null;
   if (!queueInstances.has(queueName)) {
-    queueInstances.set(queueName, new Queue(queueName, { connection, prefix: env.QUEUE_PREFIX }));
+    queueInstances.set(queueName, new Queue(queueName, { connection, prefix: queuePrefixFor(queueName) }));
   }
   return queueInstances.get(queueName);
 }

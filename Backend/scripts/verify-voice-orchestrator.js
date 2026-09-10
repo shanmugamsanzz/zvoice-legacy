@@ -1,6 +1,32 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { RealtimeConversationOrchestrator } from '../src/voice/realtime-conversation-orchestrator.js';
+import {
+  monthDateInput, normalizeVoiceResponse, phoneValidation,
+  RealtimeConversationOrchestrator, resolveRelativeDate, unansweredUserTurns,
+} from '../src/voice/realtime-conversation-orchestrator.js';
+
+assert.deepEqual(unansweredUserTurns([
+  { role: 'assistant', content: 'Welcome' },
+  { role: 'user', content: 'Why are you calling?' },
+  { role: 'user', content: 'Book an appointment tomorrow' },
+]), ['Why are you calling?', 'Book an appointment tomorrow']);
+assert.deepEqual(unansweredUserTurns([
+  { role: 'user', content: 'Old request' },
+  { role: 'assistant', content: 'Answered' },
+  { role: 'user', content: 'New request' },
+]), ['New request']);
+assert.equal(normalizeVoiceResponse('Fast for 8-10 hours.'), 'Fast for eight to ten hours.');
+assert.equal(normalizeVoiceResponse('Phone 9876543210.'), 'Phone 9876543210.');
+assert.deepEqual(phoneValidation('98765432110', [{ role: 'assistant', content: 'Phone number?' }]), {
+  valid: false, digitCount: 11,
+});
+assert.deepEqual(phoneValidation('+91 9876543210', [{ role: 'assistant', content: 'Phone number?' }]), {
+  valid: true, phoneNumber: '9876543210',
+});
+const testClock = { localDate: '2026-09-10' };
+assert.deepEqual(resolveRelativeDate('tomorrow', testClock), { isoDate: '2026-09-11', weekday: 'Friday' });
+assert.deepEqual(monthDateInput('August at 10 AM', testClock), { incomplete: true, month: 'august' });
+assert.equal(monthDateInput('August 12 at 10 AM', testClock).yearRequired, true);
 
 const waitFor = async (predicate, message, timeoutMs = 2000) => {
   const started = Date.now();
@@ -55,18 +81,20 @@ class FakeLlm {
       await new Promise((resolve) => { this.releaseSlow = resolve; });
       if (this.wasCancelled) { yield { type: 'cancelled', reason: 'barge-in' }; return; }
     }
-    if (query === 'book appointment' && !hasToolResults) {
+    if (query === 'for me' && !hasToolResults) {
       const toolCalls = [{ id: 'tool-1', name: 'book_visit', arguments: { date: 'tomorrow' } }];
       yield { type: 'tool_call', ...toolCalls[0] };
       yield { type: 'usage', usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 } };
       yield { type: 'completed', finishReason: 'tool_calls', toolCalls, usage: {} };
       return;
     }
-    if (query === 'book appointment' && hasToolResults) {
+    if (query === 'for me' && hasToolResults) {
       yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
       return;
     }
-    const text = query.includes('End the call now') ? 'Thank you. Goodbye.' : 'Your appointment is booked.';
+    const text = query.includes('End the call now') ? 'Thank you. Goodbye.'
+      : query === 'transfer without tool' ? 'You are being transferred now.'
+        : query === 'send without tool' ? 'I will send the location now.' : 'How can I help?';
     yield { type: 'text_delta', delta: text };
     yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 5, totalTokens: 17 } };
     yield { type: 'completed', finishReason: 'stop', toolCalls: [], usage: {} };
@@ -113,7 +141,7 @@ class FakeAudioEngine {
 const profile = {
   agent: {
     id: 'agent-1', tenantId: 'tenant-1', workspaceId: 'workspace-1', name: 'Hospital Agent',
-    description: 'Hospital receptionist', goal: 'Help callers', language: 'English (US)',
+    description: 'Hospital receptionist', goal: 'Help callers', language: 'English (US)', timezone: 'Asia/Kolkata',
     prompt: 'Answer briefly.', welcomeMessage: 'Welcome to the hospital.', temperature: 0.2,
     inactivityTimeoutSeconds: 30, settings: {
       silentMessage: 'Are you still there?', maxInactivityPrompts: 1,
@@ -149,6 +177,13 @@ const orchestrator = new RealtimeConversationOrchestrator(media, {
   routeKnowledge: async (auth, input) => {
     knowledgeAuth.push(auth);
     knowledgeQueries.push(input.query);
+    if (input.query === 'Silver Package appointment') {
+      return {
+        route: 'catalog', found: true, content: 'Silver Package', durationMs: 4,
+        item: { key: 'silver-package', name: 'Silver Package', category: { name: 'Master Health Check-Up Packages' } },
+        source: { recordId: 'catalog-booking', documentName: 'Package Catalog' },
+      };
+    }
     if (input.query === 'FAQ plan price?') {
       return { route: 'faq', found: true, content: 'FAQ plan costs INR 999 per month.', durationMs: 1,
         source: { recordId: 'faq-price', documentName: 'Approved FAQ' } };
@@ -174,6 +209,7 @@ const orchestrator = new RealtimeConversationOrchestrator(media, {
     return calls.map((call) => ({ id: call.id, name: call.name, success: true, output: { bookingId: 'B-1' } }));
   },
   completeCall: async (input) => { completed.push(input); return { call: { id: 'call-1' } }; },
+  now: () => new Date('2026-09-09T06:30:00.000Z'),
 });
 
 await orchestrator.ready;
@@ -187,24 +223,35 @@ await waitFor(() => stt.sent.length === 1, 'Plivo audio was not forwarded to STT
 
 stt.publish({ type: 'speech_started' });
 stt.publish({ type: 'final_transcript', text: 'book appointment', language: 'en', isFinal: true });
+await waitFor(() => transcript.some((entry) => entry.text === 'Please tell me the exact package you want to book.'), 'Booking without a package was not clarified');
+await waitFor(() => orchestrator.controller.state === 'listening', 'Package clarification did not return to listening');
+assert.equal(toolInvocations.length, 0, 'Booking must not execute without an exact package');
+
+stt.publish({ type: 'final_transcript', text: 'Silver Package appointment', language: 'en', isFinal: true });
+await waitFor(() => transcript.some((entry) => entry.text === 'Who is the appointment for?'), 'Booking did not ask who the appointment is for');
+await waitFor(() => orchestrator.controller.state === 'listening', 'For-whom question did not return to listening');
+stt.publish({ type: 'final_transcript', text: 'for me', language: 'en', isFinal: true });
 await waitFor(() => transcript.some((entry) => entry.text === 'Your appointment was booked successfully. Is there anything else I can help with?'), 'Tool success fallback was not persisted');
 await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not return to listening after playback');
-assert.deepEqual(knowledgeQueries, ['book appointment']);
+assert.deepEqual(knowledgeQueries, ['book appointment', 'Silver Package appointment', 'for me']);
 assert.equal(knowledgeAuth[0].tenantId, 'tenant-1');
 assert.equal(knowledgeAuth[0].workspaceId, 'workspace-1');
 assert.equal(toolInvocations[0].name, 'book_visit');
 assert.ok(tts.texts.includes('Your appointment was booked successfully. Is there anything else I can help with?'));
-assert.equal(llm.requests[1].tools.length, 0, 'Tools must be disabled while converting tool results into speech');
-assert.deepEqual(transcript.map((entry) => entry.speaker), ['agent', 'user', 'agent']);
+const toolResultRequest = llm.requests.find((request) => request.messages[0]?.content.includes('"toolResults"'));
+assert.equal(toolResultRequest.tools.length, 0, 'Tools must be disabled while converting tool results into speech');
+assert.match(llm.requests[0].messages[0].content, /"timeZone":"Asia\/Kolkata"/);
+assert.match(llm.requests[0].messages[0].content, /"localDate":"2026-09-09"/);
+assert.deepEqual(transcript.map((entry) => entry.speaker), ['agent', 'user', 'agent', 'user', 'agent', 'user', 'agent']);
 
 const llmRequestsBeforePrice = llm.requests.length;
 stt.publish({ type: 'final_transcript', text: 'Silver price evlo?', language: 'en', isFinal: true });
-await waitFor(() => transcript.some((entry) => entry.text === 'Silver Package price 1,650 rupees.'), 'Exact catalog price was not spoken');
+await waitFor(() => transcript.some((entry) => entry.text === 'Silver Package Price 1,650 rupees. Would you like to book an appointment or hear about another package?'), 'Exact catalog price was not spoken with both next choices');
 await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not return to listening after catalog price');
 assert.equal(llm.requests.length, llmRequestsBeforePrice, 'Exact catalog price must bypass the LLM');
 
 stt.publish({ type: 'final_transcript', text: 'Gold price evlo?', language: 'en', isFinal: true });
-await waitFor(() => transcript.some((entry) => entry.text === 'Gold Package price 4,950 rupees.'), 'Gold catalog price was not spoken');
+await waitFor(() => transcript.some((entry) => entry.text === 'Gold Package Price 4,950 rupees. Would you like to book an appointment or hear about another package?'), 'Gold catalog price was not spoken with both next choices');
 await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not return to listening after Gold price');
 assert.equal(llm.requests.length, llmRequestsBeforePrice, 'Every exact catalog price must bypass the LLM');
 
@@ -213,11 +260,20 @@ await waitFor(() => transcript.some((entry) => entry.text.startsWith('I could no
 await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not return to listening after unknown price');
 assert.equal(llm.requests.length, llmRequestsBeforePrice, 'Unverified prices must not reach the LLM');
 
+stt.publish({ type: 'final_transcript', text: 'transfer without tool', language: 'en', isFinal: true });
+await waitFor(() => transcript.some((entry) => entry.text === 'The request has not been completed yet. I will confirm it only after the action succeeds.'), 'Unverified transfer claim was not blocked');
+await waitFor(() => orchestrator.controller.state === 'listening', 'Unverified transfer guard did not return to listening');
+
+const unverifiedResponsesBeforeSend = transcript.filter((entry) => entry.text === 'The request has not been completed yet. I will confirm it only after the action succeeds.').length;
+stt.publish({ type: 'final_transcript', text: 'send without tool', language: 'en', isFinal: true });
+await waitFor(() => transcript.filter((entry) => entry.text === 'The request has not been completed yet. I will confirm it only after the action succeeds.').length > unverifiedResponsesBeforeSend, 'Unverified future send claim was not blocked');
+await waitFor(() => orchestrator.controller.state === 'listening', 'Unverified send guard did not return to listening');
+
 stt.publish({ type: 'final_transcript', text: 'FAQ plan price?', language: 'en', isFinal: true });
 await waitFor(() => llm.requests.length > llmRequestsBeforePrice, 'Approved FAQ pricing must reach the LLM');
 await waitFor(() => orchestrator.controller.state === 'listening', 'Call did not return to listening after FAQ price');
 assert.ok(transcript.filter((entry) => entry.speaker === 'agent').every((entry) => entry.answerSources.length > 0));
-assert.equal(transcript.find((entry) => entry.text.startsWith('Your appointment was booked successfully.')).answerSources[0].type, 'knowledge_base');
+assert.equal(transcript.find((entry) => entry.text.startsWith('Your appointment was booked successfully.')).answerSources[0].type, 'agent_tool');
 
 llm.wasCancelled = false;
 const completedBeforeBookingPriority = completed.length;

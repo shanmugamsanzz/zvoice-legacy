@@ -119,6 +119,7 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
   return contextRunner(async (client) => {
     const result = await client.query(
       `SELECT a.id, a.tenant_id, a.workspace_id, a.phone_number_id, a.name, a.description, a.goal, a.language,
+          COALESCE(w.timezone, t.timezone, 'UTC') AS timezone,
           a.usage_direction, a.voice_id, a.prompt, a.welcome_message, a.temperature,
           a.interruption_sensitivity, a.silence_timeout_ms, a.inactivity_timeout_seconds, a.settings,
           sm.id stt_model_id, sm.model_key stt_model_key, sm.display_name stt_model_name,
@@ -170,6 +171,8 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
          JOIN ai_providers lp ON lp.id=lm.provider_id AND lp.type='llm' AND lp.status='connected' AND lp.deleted_at IS NULL
          JOIN provider_models tm ON tm.id=a.tts_model_id AND tm.status='active' AND tm.deleted_at IS NULL
          JOIN ai_providers tp ON tp.id=tm.provider_id AND tp.type='tts' AND tp.status='connected' AND tp.deleted_at IS NULL
+         JOIN tenants t ON t.id=a.tenant_id
+         LEFT JOIN workspaces w ON w.id=a.workspace_id AND w.tenant_id=a.tenant_id
         WHERE a.id=$1 AND a.tenant_id=$2 AND a.workspace_id=$3
           AND a.status='active' AND a.deleted_at IS NULL`,
       [resolvedAgent.agentId, resolvedAgent.tenantId, resolvedAgent.workspaceId, resolvedAgent.callDirection ?? null],
@@ -195,6 +198,7 @@ export function loadAgentRuntimeProfile(resolvedAgent, dependencies = {}) {
         description: row.description,
         goal: row.goal,
         language: row.language,
+        timezone: row.timezone,
         usageDirection: row.usage_direction,
         callDirection: resolvedAgent.callDirection ?? null,
         voiceId: row.voice_id,

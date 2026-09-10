@@ -13,6 +13,21 @@ function valid(schema, value) {
   return parsed.data;
 }
 
+function recordingExtension(contentType) {
+  return contentType === 'audio/wav' || contentType === 'audio/x-wav' ? 'wav' : 'mp3';
+}
+
+function sendRecording(res, callId, recording) {
+  const contentType = recording.contentType || 'audio/mpeg';
+  return res.set({
+    'Content-Type': contentType,
+    'Content-Length': String(recording.body.length),
+    'Cache-Control': 'private, max-age=300',
+    'Content-Disposition': `inline; filename="call-${callId}.${recordingExtension(contentType)}"`,
+    'X-Content-Type-Options': 'nosniff',
+  }).send(recording.body);
+}
+
 export const callAdminRouter = Router();
 callAdminRouter.use(authenticateRequest, requireRoles('SUPER_ADMIN'));
 callAdminRouter.get('/', async (req, res) => res.json({ success: true, data: await listCalls(req.auth, valid(listCallsSchema, req.query)) }));
@@ -23,13 +38,7 @@ callAdminRouter.get('/:callId', async (req, res) => {
 callAdminRouter.get('/:callId/recording', async (req, res) => {
   const { callId } = valid(callIdSchema, req.params);
   const recording = await loadStoredCallRecording(req.auth, callId);
-  res.set({
-    'Content-Type': recording.contentType || 'audio/mpeg',
-    'Content-Length': String(recording.body.length),
-    'Cache-Control': 'private, max-age=300',
-    'Content-Disposition': `inline; filename="call-${callId}.mp3"`,
-    'X-Content-Type-Options': 'nosniff',
-  }).send(recording.body);
+  sendRecording(res, callId, recording);
 });
 callAdminRouter.post('/:callId/hangup', async (req, res) => {
   const { callId } = valid(callIdSchema, req.params);
@@ -51,11 +60,5 @@ tenantCallRouter.get('/:callId', async (req, res) => {
 tenantCallRouter.get('/:callId/recording', async (req, res) => {
   const { callId } = valid(callIdSchema, req.params);
   const recording = await loadStoredCallRecording(req.auth, callId);
-  res.set({
-    'Content-Type': recording.contentType || 'audio/mpeg',
-    'Content-Length': String(recording.body.length),
-    'Cache-Control': 'private, max-age=300',
-    'Content-Disposition': `inline; filename="call-${callId}.mp3"`,
-    'X-Content-Type-Options': 'nosniff',
-  }).send(recording.body);
+  sendRecording(res, callId, recording);
 });

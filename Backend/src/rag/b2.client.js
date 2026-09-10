@@ -123,7 +123,7 @@ async function nativeDeleteAllVersions(key) {
   };
 }
 
-async function nativePutB2Object({ key, body, contentType, metadata }) {
+async function nativePutB2Object({ key, body, contentType, metadata, timeoutMs = env.PROVIDER_REQUEST_TIMEOUT_MS }) {
   const authorization = await authorizeNativeB2();
   const target = await fetchB2Json(`${authorization.apiUrl}/b2api/v4/b2_get_upload_url`, {
     method: 'POST',
@@ -150,7 +150,7 @@ async function nativePutB2Object({ key, body, contentType, metadata }) {
       method: 'POST',
       headers,
       body,
-      signal: AbortSignal.timeout(env.PROVIDER_REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
@@ -232,9 +232,11 @@ export async function checkB2() {
   return { ok: true, latencyMs: Math.round((performance.now() - startedAt) * 100) / 100 };
 }
 
-export async function putB2Object({ key, body, contentType, metadata = {} }) {
+export async function putB2Object({
+  key, body, contentType, metadata = {}, timeoutMs = env.PROVIDER_REQUEST_TIMEOUT_MS,
+}) {
   if (!Buffer.isBuffer(body)) throw new TypeError('Backblaze B2 upload body must be a Buffer');
-  if (nativeB2Preferred) return nativePutB2Object({ key, body, contentType, metadata });
+  if (nativeB2Preferred) return nativePutB2Object({ key, body, contentType, metadata, timeoutMs });
   try {
     return await measureExternalProvider('backblaze-b2', 'put-object', async () => {
       const result = await getStorageClient().send(new PutObjectCommand({
@@ -244,7 +246,7 @@ export async function putB2Object({ key, body, contentType, metadata = {} }) {
         ContentLength: body.length,
         ContentType: contentType,
         Metadata: Object.fromEntries(Object.entries(metadata).map(([name, value]) => [name, String(value)])),
-      }), { abortSignal: AbortSignal.timeout(env.PROVIDER_REQUEST_TIMEOUT_MS) });
+      }), { abortSignal: AbortSignal.timeout(timeoutMs) });
       return {
         bucket: env.B2_BUCKET,
         key,
@@ -255,7 +257,7 @@ export async function putB2Object({ key, body, contentType, metadata = {} }) {
   } catch (s3Error) {
     try {
       nativeB2Preferred = true;
-      return await nativePutB2Object({ key, body, contentType, metadata });
+      return await nativePutB2Object({ key, body, contentType, metadata, timeoutMs });
     } catch (nativeError) {
       throw new AggregateError([s3Error, nativeError], 'Backblaze B2 upload failed through S3 and native APIs');
     }

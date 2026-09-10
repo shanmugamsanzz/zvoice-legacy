@@ -64,8 +64,8 @@ async function insertTenant(client) {
     [`semantic-index-verification-${suffix}`],
   );
   const organization = await client.query(
-    `INSERT INTO organizations (tenant_id, name, status)
-     VALUES ($1, 'Semantic index verification', 'active') RETURNING id`,
+    `INSERT INTO organizations (tenant_id, name, status, per_minute_price)
+     VALUES ($1, 'Semantic index verification', 'active', 1) RETURNING id`,
     [tenant.rows[0].id],
   );
   const workspace = await client.query(
@@ -204,11 +204,15 @@ async function verifyLiveSemanticIndexing() {
 
     const result = await processSemanticIndexJob(fixture.jobId, dependencies);
     assert.equal(result.status, 'completed');
-    assert.equal(result.indexedRecordCount, 2);
-    assert.equal(embeddedTexts.length, 2);
-    assert.equal(indexedPoints.length, 2, 'Catalog data must remain in PostgreSQL and not be embedded');
+    assert.equal(result.indexedRecordCount, 3);
+    assert.equal(embeddedTexts.length, 3);
+    assert.equal(indexedPoints.length, 3, 'Approved catalog items must be available to semantic retrieval');
     assert.deepEqual(new Set(indexedPoints.map((point) => point.payload.record_type)),
-      new Set(['FAQ', 'KNOWLEDGE_CHUNK']));
+      new Set(['FAQ', 'CATALOG_ITEM', 'KNOWLEDGE_CHUNK']));
+    const catalogPoint = indexedPoints.find((point) => point.payload.record_type === 'CATALOG_ITEM');
+    assert.equal(catalogPoint.payload.item_name, 'Silver Package');
+    assert.equal(catalogPoint.payload.price, 1650);
+    assert.equal(catalogPoint.payload.currency, 'INR');
     assert.ok(indexedPoints.every((point) => point.payload.tenant_id === tenant.tenantId));
     assert.ok(indexedPoints.every((point) => point.payload.publication_revision === 1));
     assert.ok(indexedPoints.every((point) => point.vector.length === 384));
@@ -307,8 +311,8 @@ console.log(JSON.stringify({
     separateTenantCollections: true,
     frozenVectorConfiguration: true,
     payloadIndexes: 8,
-    approvedSemanticTypes: ['faq', 'general_knowledge'],
-    structuredDataNotEmbedded: true,
+    approvedSemanticTypes: ['faq', 'catalog', 'general_knowledge'],
+    approvedCatalogItemsEmbedded: true,
     deterministicPointIds: true,
     publicationRevisionIsolation: true,
     retryAndFailureState: true,

@@ -1,6 +1,7 @@
 import { Worker } from 'bullmq';
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
+import { queuePrefixFor } from '../queues/queue.registry.js';
 import { executeKnowledgeJob } from './knowledge-job.dispatcher.js';
 import { requeuePendingKnowledgeJobs } from './knowledge-processing.queue.js';
 
@@ -22,7 +23,7 @@ export async function startKnowledgeProcessingWorker() {
     (job) => executeKnowledgeJob(job.data.processingJobId),
     {
       connection,
-      prefix: env.QUEUE_PREFIX,
+      prefix: queuePrefixFor('knowledge-processing'),
       concurrency: env.KNOWLEDGE_WORKER_CONCURRENCY,
     },
   );

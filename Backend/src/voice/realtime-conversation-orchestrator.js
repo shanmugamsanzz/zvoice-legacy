@@ -21,6 +21,149 @@ import { renderWelcomeTemplate, welcomeTemplateContext } from './welcome-templat
 import { interruptionDecision } from './interruption/interruption-policy.js';
 
 const bookingIntent = /\b(?:appointment|book(?:ing)?|schedule|visit)\b|\u0B85\u0BAA\u0BCD\u0BAA\u0BBE\u0BAF\u0BBF\u0BA3\u0BCD\u0B9F\u0BCD\u0BAE\u0BC6\u0BA3\u0BCD\u0B9F\u0BCD|\u0BAA\u0BC1\u0B95\u0BCD\s*\u0BAA\u0BA3\u0BCD\u0BA3/iu;
+const relativeDatePattern = /\b(?:today|tomorrow|day after tomorrow)\b|\u0B87\u0BA9\u0BCD\u0BB1\u0BC1|\u0BA8\u0BBE\u0BB3\u0BC8(?:\u0B95\u0BCD\u0B95\u0BC1)?|\u0BA8\u0BBE\u0BB3\u0BC8\s*\u0BAE\u0BB1\u0BC1\u0BA8\u0BBE\u0BB3\u0BCD/iu;
+const appointmentForCallerPattern = /\b(?:for me|myself)\b|\u0B8E\u0BA9\u0B95\u0BCD\u0B95\u0BC1(?:\s*\u0BA4\u0BBE\u0BA9\u0BCD)?|\u0BA8\u0BBE\u0BA9\u0BCD\s*\u0BA4\u0BBE\u0BA9\u0BCD/iu;
+const monthPattern = /\b(january|february|march|april|may|june|july|august|september|october|november|december)\b|\u0B86\u0B95\u0BB8\u0BCD\u0B9F\u0BCD/iu;
+const comparisonIntent = /\b(?:compare|comparison|difference|different|versus|vs\.?)\b|வித்தியாசம்|ஒப்பிட/iu;
+const ordinalCatalogReference = /\b(?:first(?:\s+one|\s+of\s+all)?|second(?:\s+one)?|third(?:\s+one)?)\b|(?:முதல்|முதலாவது|ரெண்டாவது|இரண்டாவது|மூன்றாவது)(?:\s+ஒன்று|\s+ஒன்னு)?/iu;
+
+function runtimeClock(timeZone, now = new Date()) {
+  const resolvedTimeZone = String(timeZone ?? '').trim() || 'UTC';
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: resolvedTimeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'long',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(now).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  return {
+    timeZone: resolvedTimeZone,
+    localDate: `${parts.year}-${parts.month}-${parts.day}`,
+    localWeekday: parts.weekday,
+    localTime: `${parts.hour}:${parts.minute}:${parts.second}`,
+  };
+}
+
+function missingPackageSelectionAnswer(language) {
+  return /(?:tamil|\bta(?:-|\b))/i.test(String(language ?? ''))
+    ? 'Appointment எந்த exact Package-க்கு book பண்ணணும்னு சொல்லுங்க.'
+    : 'Please tell me the exact package you want to book.';
+}
+
+function bookingToolAvailable(tools = []) {
+  return tools.some((tool) => /(?:appointment|book|booking|schedule|visit)/i
+    .test(String(tool.name ?? '') + ' ' + String(tool.description ?? '')));
+}
+
+export function unansweredUserTurns(history = []) {
+  const pending = [];
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index];
+    if (message.role === 'assistant') break;
+    if (message.role === 'user' && String(message.content ?? '').trim()) pending.unshift(String(message.content).trim());
+  }
+  return pending;
+}
+
+function preferredDateExpression(query) {
+  return String(query ?? '').match(relativeDatePattern)?.[0] ?? null;
+}
+
+function contextualCatalogQuery(query, state) {
+  const match = String(query ?? '').match(ordinalCatalogReference)?.[0]?.toLowerCase();
+  const items = state.lastCatalogItems ?? [];
+  if (!match || !items.length) return query;
+  const index = /second|ரெண்டாவது|இரண்டாவது/u.test(match)
+    ? 1 : (/third|மூன்றாவது/u.test(match) ? 2 : 0);
+  const item = items[index];
+  return item?.name ? `${query} ${item.name}` : query;
+}
+
+export function resolveRelativeDate(expression, clock) {
+  const value = String(expression ?? '').toLowerCase();
+  const days = /day after tomorrow|\u0BA8\u0BBE\u0BB3\u0BC8\s*\u0BAE\u0BB1\u0BC1\u0BA8\u0BBE\u0BB3\u0BCD/u.test(value)
+    ? 2 : (/tomorrow|\u0BA8\u0BBE\u0BB3\u0BC8/u.test(value) ? 1 : 0);
+  const [year, month, day] = clock.localDate.split('-').map(Number);
+  const resolved = new Date(Date.UTC(year, month - 1, day + days));
+  return {
+    isoDate: resolved.toISOString().slice(0, 10),
+    weekday: new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone: 'UTC' }).format(resolved),
+  };
+}
+
+function lastAssistantTurn(history) {
+  return [...history].reverse().find((message) => message.role === 'assistant')?.content ?? '';
+}
+
+export function phoneValidation(query, history) {
+  if (!/\b(?:phone|mobile|contact)\b/i.test(String(lastAssistantTurn(history)))) return null;
+  const digits = String(query ?? '').replace(/\D/g, '');
+  if (digits.length < 7) return null;
+  const national = digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : digits;
+  return national.length === 10
+    ? { valid: true, phoneNumber: national }
+    : { valid: false, digitCount: digits.length };
+}
+
+export function monthDateInput(query, clock) {
+  const value = String(query ?? '');
+  const monthMatch = value.match(monthPattern);
+  if (!monthMatch) return null;
+  const monthNames = ['january', 'february', 'march', 'april', 'may', 'june',
+    'july', 'august', 'september', 'october', 'november', 'december'];
+  const spokenMonth = monthMatch[1]?.toLowerCase() ?? 'august';
+  const month = monthNames.indexOf(spokenMonth) + 1;
+  const suffix = value.slice((monthMatch.index ?? 0) + monthMatch[0].length);
+  const dayMatch = suffix.match(/^\s*(\d{1,2})(?:st|nd|rd|th)?\b/i);
+  if (!dayMatch) return { incomplete: true, month: spokenMonth };
+  const day = Number(dayMatch[1]);
+  const explicitYear = suffix.slice(dayMatch[0].length).match(/^\s*,?\s*(20\d{2})\b/)?.[1];
+  const year = Number(explicitYear ?? clock.localDate.slice(0, 4));
+  const candidate = new Date(Date.UTC(year, month - 1, day));
+  if (candidate.getUTCFullYear() !== year || candidate.getUTCMonth() !== month - 1 || candidate.getUTCDate() !== day) {
+    return { invalid: true, month: spokenMonth, day };
+  }
+  const isoDate = candidate.toISOString().slice(0, 10);
+  return {
+    month: spokenMonth, day, year, isoDate,
+    yearRequired: !explicitYear && isoDate < clock.localDate,
+    weekday: new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone: 'UTC' }).format(candidate),
+  };
+}
+
+function catalogAttribute(item, key) {
+  const attribute = (item?.attributes ?? []).find((entry) => entry.key === key);
+  return attribute?.value ?? null;
+}
+
+function nextBookingField(state) {
+  if (!state.bookingRequested || state.packageSelectionRequired || !state.selectedItem) return null;
+  return state.bookingFields.appointmentFor ? null : 'appointmentFor';
+}
+
+export function normalizeVoiceResponse(text) {
+  const numberWords = new Map([
+    ['0', 'zero'], ['1', 'one'], ['2', 'two'], ['3', 'three'], ['4', 'four'], ['5', 'five'],
+    ['6', 'six'], ['7', 'seven'], ['8', 'eight'], ['9', 'nine'], ['10', 'ten'], ['11', 'eleven'],
+    ['12', 'twelve'], ['13', 'thirteen'], ['14', 'fourteen'], ['15', 'fifteen'], ['16', 'sixteen'],
+    ['17', 'seventeen'], ['18', 'eighteen'], ['19', 'nineteen'], ['20', 'twenty'], ['24', 'twenty four'],
+  ]);
+  return String(text ?? '')
+    .replace(/\b(\d{1,2})\s*[-–]\s*(\d{1,2})(?=\s*(?:hours?|hrs?|\u0BAE\u0BA3\u0BBF\s*\u0BA8\u0BC7\u0BB0\u0BAE\u0BCD))/giu,
+      (_match, start, end) => (numberWords.get(start) ?? start) + ' to ' + (numberWords.get(end) ?? end))
+    ;
+}
+
+function enforceNextBookingQuestion(text, flowState, language) {
+  if (flowState.nextBookingField !== 'appointmentFor') return text;
+  if (/(?:who[^.!?]{0,80}appointment|appointment[^.!?]{0,100}(?:\u0BAF\u0BBE\u0BB0\u0BC1\u0B95\u0BCD\u0B95\u0BBE\u0B95|yarukkaga)|(?:\u0BAF\u0BBE\u0BB0\u0BC1\u0B95\u0BCD\u0B95\u0BBE\u0B95|yarukkaga)[^.!?]{0,100}appointment)/iu.test(String(text ?? ''))) return text;
+  const question = /(?:tamil|\bta(?:-|\b))/i.test(String(language ?? ''))
+    ? 'Appointment \u0BAF\u0BBE\u0BB0\u0BC1\u0B95\u0BCD\u0B95\u0BBE\u0B95 book \u0BAA\u0BA3\u0BCD\u0BA3\u0BA3\u0BC1\u0BAE\u0BCD?'
+    : 'Who is the appointment for?';
+  const withoutSkippedQuestion = String(text ?? '').replace(
+    /(?:Appointment[^.!?]*(?:patient|name)[^.!?]*[.!?]?|(?:Please\s+)?(?:tell|provide)[^.!?]*patient[^.!?]*name[^.!?]*[.!?]?)$/iu,
+    '',
+  ).replace(/[^.!?]*\?\s*$/u, '').trim();
+  return withoutSkippedQuestion + (withoutSkippedQuestion ? ' ' : '') + question;
+}
 
 function languageCode(value) {
   const match = String(value ?? '').match(/\b([a-z]{2,3})(?:-[A-Z]{2})?\b/);
@@ -44,7 +187,7 @@ function fallbackRecovery(profile) {
       : 'Sorry, I had a temporary problem. Could you please say that again?');
 }
 
-function exactCatalogPriceAnswer(query, knowledge) {
+function exactCatalogPriceAnswer(query, knowledge, language) {
   if (knowledge?.route !== 'catalog' || !priceQuestionPattern.test(String(query ?? ''))) return null;
   const name = String(knowledge.item?.name ?? '').trim();
   const rawPrice = knowledge.item?.price;
@@ -55,12 +198,17 @@ function exactCatalogPriceAnswer(query, knowledge) {
     : String(rawPrice).trim();
   const currency = String(knowledge.item?.currency ?? '').trim().toUpperCase();
   const spokenCurrency = currency === 'INR' ? 'rupees' : currency;
-  return `${name} price ${price}${spokenCurrency ? ` ${spokenCurrency}` : ''}.`;
+  const amount = `${name} Price ${price}${spokenCurrency ? ` ${spokenCurrency}` : ''}.`;
+  const tamil = /(?:tamil|\bta(?:-|\b))/i.test(String(language ?? ''));
+  return tamil
+    ? `${amount} Appointment book \u0BAA\u0BA3\u0BCD\u0BA3\u0BB2\u0BBE\u0BAE\u0BBE, \u0B87\u0BB2\u0BCD\u0BB2 \u0BB5\u0BC7\u0BB1 Package details \u0BB5\u0BC7\u0BA3\u0BC1\u0BAE\u0BBE?`
+    : `${amount} Would you like to book an appointment or hear about another package?`;
 }
 
 function unverifiedCatalogPriceAnswer(query, knowledge) {
   if (knowledge?.ambiguous) return 'Please confirm the product and plan name so I can give you the correct price.';
   if (!priceQuestionPattern.test(String(query ?? '')) || exactCatalogPriceAnswer(query, knowledge)) return null;
+  if (knowledge?.route === 'catalog' && knowledge.items?.length) return null;
   if (knowledge?.route !== 'catalog' && hasKnowledgePrice(knowledge)) return null;
   return 'I could not verify that package price from the approved catalog. Please confirm the package name.';
 }
@@ -86,12 +234,32 @@ function toolResultFallback(toolResults, language, query) {
     : 'Your request was completed successfully. Is there anything else I can help with?';
 }
 
+function hasCompletedActionClaim(text) {
+  const value = String(text ?? '');
+  return /\b(?:successfully\s+(?:booked|sent|transferred|connected|completed)|(?:has been|was|is now)\s+(?:booked|sent|transferred|connected|completed)|you\s+are\s+being\s+(?:transferred|connected)|(?:transferring|connecting)\s+you\s+now|book(?:ing)?\s+aayiduchu|complete\s+aayiduchu)\b|\u0BB5\u0BC6\u0BB1\u0BCD\u0BB1\u0BBF\u0B95\u0BB0\u0BAE\u0BBE\u0B95[^.!?]{0,80}(?:book|\u0BAA\u0BC1\u0B95\u0BCD)|\u0BAE\u0BBE\u0BB1\u0BCD\u0BB1\u0BAA\u0BCD\u0BAA\u0B9F\u0BC1\u0B95\u0BBF\u0BB1|\u0B87\u0BA3\u0BC8\u0B95\u0BCD\u0B95\u0BAA\u0BCD\u0BAA\u0B9F\u0BCD\u0B9F|\u0B85\u0BA9\u0BC1\u0BAA\u0BCD\u0BAA\u0BAA\u0BCD\u0BAA\u0B9F\u0BCD\u0B9F/iu.test(value);
+}
+
+function hasUnverifiedActionProgressClaim(text) {
+  const value = String(text ?? '');
+  return hasCompletedActionClaim(value)
+    || /\b(?:i(?:'m| am)\s+(?:sending|booking|transferring|connecting)|i(?:'ll| will)\s+(?:send|book|transfer|connect)|(?:sending|booking|transferring|connecting)\s+(?:it|you|the\s+(?:location|brochure|appointment))?\s*now)\b|\b(?:location|brochure|appointment)\s+(?:will\s+be|is\s+being)\s+(?:sent|booked)|அனுப்பி\s*(?:வைக்கிறேன்|விடுகிறேன்|வைக்கப்படும்)|புக்\s*பண்ண(?:றேன்|ுகிறேன்)/iu.test(value);
+}
+
+function unverifiedActionResponse(profile) {
+  const configured = String(profile.agent.settings?.unverifiedActionMessage ?? '').trim();
+  if (configured) return configured;
+  const tamil = /(?:tamil|\bta(?:-|\b))/i.test(String(profile.agent.language ?? ''));
+  return tamil
+    ? 'Request \u0B87\u0BA9\u0BCD\u0BA9\u0BC1\u0BAE\u0BCD complete \u0B86\u0B95\u0BB2. Action successful \u0B86\u0BA9 \u0BAA\u0BBF\u0BB1\u0B95\u0BC1 confirm \u0BAA\u0BA3\u0BCD\u0BA3\u0BB1\u0BC7\u0BA9\u0BCD.'
+    : 'The request has not been completed yet. I will confirm it only after the action succeeds.';
+}
+
 function answerSources(knowledge, { toolUsed = false } = {}) {
   if (!knowledge?.found) {
     return [{ type: toolUsed ? 'agent_tool' : 'model', label: toolUsed ? 'Agent tool result' : 'AI model (no Knowledge Base match)' }];
   }
   const candidates = knowledge.matches?.length ? knowledge.matches : [knowledge.source ?? {}];
-  return candidates.slice(0, 3).map((source) => ({
+  const knowledgeSources = candidates.slice(0, toolUsed ? 2 : 3).map((source) => ({
     type: 'knowledge_base',
     label: source.documentName ?? source.knowledgeBaseName ?? 'Knowledge Base',
     route: knowledge.route,
@@ -102,6 +270,9 @@ function answerSources(knowledge, { toolUsed = false } = {}) {
     documentName: source.documentName ?? null,
     pageNumber: source.pageNumber ?? null,
   }));
+  return toolUsed
+    ? [{ type: 'agent_tool', label: 'Agent tool result' }, ...knowledgeSources]
+    : knowledgeSources;
 }
 
 export class RealtimeConversationOrchestrator {
@@ -115,6 +286,7 @@ export class RealtimeConversationOrchestrator {
     this.startedAt = Date.now();
     this.epoch = 0;
     this.errorCount = 0;
+    this.recoveryActive = false;
     this.finalized = false;
     this.closing = false;
     this.activeLlm = null;
@@ -127,6 +299,13 @@ export class RealtimeConversationOrchestrator {
     this.utteranceOverlappedAgent = null;
     this.listeners = [];
     this.runtimeMetrics = { knowledge: [], tools: [], latency: {} };
+    this.conversationFlowState = {
+      stage: 'awaiting_first_response', turnNumber: 0,
+      selectedCategory: null, selectedItem: null,
+      bookingRequested: false, packageSelectionRequired: false, lastAction: null,
+      bookingFields: { appointmentFor: null, preferredDateExpression: null },
+      lastCatalogItems: [],
+    };
     this.llmCircuitBreaker = new LlmCircuitBreaker();
     this.providerHealth = dependencies.providerHealth ?? tenantProviderHealth;
     this.#attach();
@@ -458,7 +637,7 @@ export class RealtimeConversationOrchestrator {
     return true;
   }
 
-  async #knowledge(query, history = []) {
+  async #knowledge(query, history = [], options = {}) {
     try {
       const routeKnowledge = this.dependencies.routeKnowledge ?? routeKnowledgeQuery;
       const result = await routeKnowledge({
@@ -473,6 +652,7 @@ export class RealtimeConversationOrchestrator {
         language: languageCode(this.runtimeProfile.agent.language),
         routeHint: 'auto',
         history,
+        ...(options.includeCatalogHierarchy ? { includeCatalogHierarchy: true } : {}),
       });
       this.runtimeMetrics.knowledge.push({
         route: result.route, found: result.found === true, durationMs: Number(result.durationMs ?? 0),
@@ -482,6 +662,98 @@ export class RealtimeConversationOrchestrator {
       this.log.warn({ err: error, callId: this.call.id }, 'Knowledge retrieval failed; continuing without unverified context');
       return { route: 'none', found: false, content: null, source: null, error: error.code ?? 'KNOWLEDGE_UNAVAILABLE' };
     }
+  }
+
+  #advanceConversationFlow(query, history, knowledge, clock) {
+    const state = this.conversationFlowState;
+    state.turnNumber += 1;
+    state.validationError = null;
+    const dateExpression = preferredDateExpression(query);
+    if (dateExpression && (state.bookingRequested || bookingIntent.test(String(query ?? '')))) {
+      const resolved = resolveRelativeDate(dateExpression, clock);
+      state.bookingFields.preferredDateExpression = resolved.isoDate;
+      state.bookingFields.preferredDateWeekday = resolved.weekday;
+      state.bookingFields.pendingDateMonth = null;
+      if (resolved.weekday === 'Sunday') {
+        state.validationError = { type: 'sunday_date', isoDate: resolved.isoDate };
+      }
+    }
+    if (state.bookingRequested && appointmentForCallerPattern.test(String(query ?? ''))) {
+      state.bookingFields.appointmentFor = 'caller';
+    }
+    const firstUserTurn = history.filter((message) => message.role === 'user').length === 1;
+    if (firstUserTurn) state.stage = 'opening_response';
+    if (knowledge?.route === 'catalog') {
+      if (knowledge.items?.length) {
+        state.lastCatalogItems = knowledge.items.map((item) => ({ key: item.key, name: item.name }));
+      }
+      if (knowledge.item) {
+        state.selectedItem = {
+          key: knowledge.item.key ?? null,
+          name: knowledge.item.name ?? null,
+          preparation: {
+            fasting: catalogAttribute(knowledge.item, 'fasting'),
+            water: catalogAttribute(knowledge.item, 'water'),
+            recommendedVisitTime: catalogAttribute(knowledge.item, 'recommended_visit_time'),
+            bringPreviousReports: catalogAttribute(knowledge.item, 'bring_previous_reports'),
+          },
+        };
+        state.selectedCategory = knowledge.item.category ?? state.selectedCategory;
+        state.stage = state.bookingRequested ? 'booking_collection' : 'package_explanation';
+      } else if (knowledge.candidates || knowledge.ambiguous) {
+        state.selectedItem = null;
+        state.packageSelectionRequired = true;
+        state.stage = 'package_selection';
+      } else if (knowledge.category || knowledge.list) {
+        state.selectedCategory = knowledge.category ?? null;
+        state.stage = 'package_selection';
+      }
+    }
+    if (comparisonIntent.test(String(query ?? ''))) {
+      state.selectedItem = null;
+      state.packageSelectionRequired = true;
+      state.stage = 'package_selection';
+    }
+    if (bookingIntent.test(String(query ?? ''))) {
+      state.bookingRequested = true;
+      state.packageSelectionRequired = !state.selectedItem;
+      state.stage = state.packageSelectionRequired ? 'package_selection' : 'booking_collection';
+    }
+    if (state.bookingRequested) {
+      const phone = phoneValidation(query, history);
+      if (phone?.valid) state.bookingFields.phoneNumber = phone.phoneNumber;
+      else if (phone) state.validationError = { type: 'invalid_phone', digitCount: phone.digitCount };
+
+      const dateInput = monthDateInput(query, clock);
+      if (dateInput?.incomplete) {
+        state.bookingFields.pendingDateMonth = dateInput.month;
+        state.validationError = { type: 'incomplete_date', month: dateInput.month };
+      } else if (dateInput?.invalid) {
+        state.validationError = { type: 'invalid_date' };
+      } else if (dateInput?.yearRequired) {
+        state.validationError = { type: 'year_required', month: dateInput.month, day: dateInput.day };
+      } else if (dateInput?.isoDate) {
+        state.bookingFields.preferredDateExpression = dateInput.isoDate;
+        state.bookingFields.preferredDateWeekday = dateInput.weekday;
+        state.bookingFields.pendingDateMonth = null;
+        if (dateInput.weekday === 'Sunday') {
+          state.validationError = { type: 'sunday_date', isoDate: dateInput.isoDate };
+        }
+      } else if (state.bookingFields.pendingDateMonth && /\b\d{1,2}\b/.test(String(query ?? ''))) {
+        state.validationError = { type: 'incomplete_date', month: state.bookingFields.pendingDateMonth };
+      }
+    }
+    const pendingUserTurns = unansweredUserTurns(history);
+    const hasBookingTool = bookingToolAvailable(this.runtimeProfile.tools);
+    return {
+      ...state,
+      bookingFields: { ...state.bookingFields },
+      pendingUserTurns,
+      nextBookingField: hasBookingTool ? nextBookingField(state) : null,
+      bookingToolAvailable: hasBookingTool,
+      firstUserTurn,
+      hasApprovedConversationFlow: Boolean(knowledge?.conversationGuidance?.nodes?.length),
+    };
   }
 
   async #llmAttempt(query, history, knowledge, context = {}) {
@@ -494,6 +766,8 @@ export class RealtimeConversationOrchestrator {
       context: {
         callId: this.call.id,
         direction: this.call.direction,
+        clock: runtimeClock(this.runtimeProfile.agent.timezone, this.dependencies.now?.() ?? new Date()),
+        availableTools: (this.runtimeProfile.tools ?? []).map((tool) => tool.name),
         preCall: this.preCallContext,
         ...runtimeContext,
       },
@@ -547,16 +821,28 @@ export class RealtimeConversationOrchestrator {
 
   async #runTurn(query, history, epoch) {
     const turnStartedAt = Date.now();
-    const knowledge = await this.#knowledge(query, history);
+    const firstUserTurn = history.filter((message) => message.role === 'user').length === 1;
+    const phraseDecision = interruptionDecision(query, this.#interruptionOptions());
+    const pendingUserTurns = unansweredUserTurns(history);
+    const pendingQuery = pendingUserTurns.length > 1 ? pendingUserTurns.join(' ') : query;
+    const retrievalQuery = contextualCatalogQuery(pendingQuery, this.conversationFlowState);
+    const knowledge = await this.#knowledge(retrievalQuery, history, {
+      includeCatalogHierarchy: firstUserTurn && phraseDecision.acknowledgement,
+    });
     if (epoch !== this.epoch || this.finalized) return;
-    const exactPrice = exactCatalogPriceAnswer(query, knowledge);
+    const clock = runtimeClock(this.runtimeProfile.agent.timezone, this.dependencies.now?.() ?? new Date());
+    const flowState = this.#advanceConversationFlow(query, history, knowledge, clock);
+    const missingPackage = bookingIntent.test(String(query ?? '')) && flowState.packageSelectionRequired
+      && flowState.pendingUserTurns.length === 1 && flowState.bookingToolAvailable
+      ? missingPackageSelectionAnswer(this.runtimeProfile.agent.language) : null;
+    const exactPrice = exactCatalogPriceAnswer(query, knowledge, this.runtimeProfile.agent.language);
     const unverifiedPrice = unverifiedCatalogPriceAnswer(query, knowledge);
-    let response = exactPrice || unverifiedPrice
-      ? { cancelled: false, text: exactPrice ?? unverifiedPrice, toolCalls: [] }
+    let response = missingPackage || exactPrice || unverifiedPrice
+      ? { cancelled: false, text: missingPackage ?? exactPrice ?? unverifiedPrice, toolCalls: [] }
       : null;
     if (!response) {
       try {
-        response = await this.#llm(query, history, knowledge);
+        response = await this.#llm(query, history, knowledge, { conversationFlow: flowState });
       } catch (error) {
         this.providerHealth.record(this.runtimeProfile.agent.tenantId, 'llm', this.runtimeProfile.providers.llm, 'failure', {
           code: error.code,
@@ -571,6 +857,7 @@ export class RealtimeConversationOrchestrator {
     }
     if (response.cancelled || epoch !== this.epoch) return;
     let toolUsed = false;
+    let verifiedToolSuccess = false;
     if (response.toolCalls.length) {
       toolUsed = true;
       const toolResults = await (this.dependencies.executeTools ?? executeAgentTools)(
@@ -579,8 +866,22 @@ export class RealtimeConversationOrchestrator {
       this.runtimeMetrics.tools.push(...toolResults.map((result) => ({
         name: result.name, success: result.success, durationMs: Number(result.durationMs ?? 0),
       })));
+      const successful = toolResults.length > 0 && toolResults.every((result) => result.success === true);
+      verifiedToolSuccess = successful;
+      this.conversationFlowState.lastAction = {
+        names: toolResults.map((result) => result.name), successful,
+      };
+      const bookingAction = toolResults.some((result) => /(?:appointment|book|booking|schedule|visit)/i
+        .test(String(result.name ?? '')));
+      if (successful && bookingAction) {
+        this.conversationFlowState.bookingRequested = false;
+        this.conversationFlowState.packageSelectionRequired = false;
+        this.conversationFlowState.bookingFields = { appointmentFor: null, preferredDateExpression: null };
+      }
+      this.conversationFlowState.stage = successful ? 'action_completed' : 'action_failed';
       if (epoch !== this.epoch) return;
       response = await this.#llm(query, history, knowledge, {
+        conversationFlow: { ...this.conversationFlowState },
         toolResults,
         disableTools: true,
         instruction: 'Use these tool results to answer the caller. Never claim an unsuccessful tool completed.',
@@ -590,7 +891,15 @@ export class RealtimeConversationOrchestrator {
       }
     }
     if (response.cancelled || epoch !== this.epoch || this.finalized) return;
-    const answer = response.text || String(this.runtimeProfile.agent.settings?.noResponseMessage ?? 'Sorry, I could not form a response.');
+    if (!verifiedToolSuccess && hasUnverifiedActionProgressClaim(response.text)) {
+      this.log.warn({ stage: 'tool.unverified_claim_blocked', callId: this.call.id }, 'Unverified action claim was blocked');
+      response = { ...response, text: unverifiedActionResponse(this.runtimeProfile), toolCalls: [] };
+    }
+    const answer = normalizeVoiceResponse(enforceNextBookingQuestion(
+      response.text || String(this.runtimeProfile.agent.settings?.noResponseMessage ?? 'Sorry, I could not form a response.'),
+      toolUsed ? { ...flowState, nextBookingField: null } : flowState,
+      this.runtimeProfile.agent.language,
+    ));
     await this.controller.setAssistantResponse(answer, Date.now(), answerSources(knowledge, { toolUsed }));
     await this.#synthesize(answer, `turn-${epoch}`, { kind: 'response', startedAt: turnStartedAt });
     if (epoch !== this.epoch || this.finalized || this.controller.state !== callStates.SPEAKING) return;
@@ -664,13 +973,16 @@ export class RealtimeConversationOrchestrator {
     this.activeSynthesisCount += 1;
     try {
       let lastError;
-      for (let attempt = 0; attempt <= env.VOICE_PROVIDER_MAX_RETRIES; attempt += 1) {
+      const transientTransportRetries = Math.max(env.VOICE_PROVIDER_MAX_RETRIES, 3);
+      for (let attempt = 0; attempt <= transientTransportRetries; attempt += 1) {
         try {
           return await this.#synthesizeAttempt(text, generationId, options);
         } catch (error) {
           lastError = error;
+          const retryLimit = error?.code === 'TTS_PROVIDER_UNAVAILABLE'
+            ? transientTransportRetries : env.VOICE_PROVIDER_MAX_RETRIES;
           const canRetry = error?.retryable === true && error.audioStarted !== true
-            && attempt < env.VOICE_PROVIDER_MAX_RETRIES;
+            && attempt < retryLimit;
           if (!canRetry) throw error;
           if (options.capture) options.capture.length = 0;
           const delayMs = env.VOICE_PROVIDER_RETRY_BASE_MS * (2 ** attempt);
@@ -769,6 +1081,12 @@ export class RealtimeConversationOrchestrator {
 
   async #recover(error, stage) {
     if (this.finalized) return;
+    if (this.recoveryActive) {
+      this.log.warn({ stage, callId: this.call.id }, 'Duplicate voice recovery was suppressed');
+      return;
+    }
+    this.recoveryActive = true;
+    try {
     this.errorCount += 1;
     const kind = stage === 'stt' ? 'stt' : (stage.startsWith('tts') || stage === 'audio_output' ? 'tts' : (stage.startsWith('llm') || stage === 'turn' ? 'llm' : null));
     if (kind) this.providerHealth.record(
@@ -801,6 +1119,9 @@ export class RealtimeConversationOrchestrator {
       }
     }
     this.#armInactivity();
+    } finally {
+      this.recoveryActive = false;
+    }
   }
 
   async #finalize(outcome, reason) {

@@ -1,4 +1,12 @@
-import { normalizeKnowledgeText as normalize, catalogKeywords, catalogLookup } from './catalog-matching.js';
+import {
+  normalizeKnowledgeText as normalize,
+  catalogKeywords,
+  catalogListQuestionPattern,
+  catalogLookup,
+  catalogCategoryCandidates,
+  catalogCategory,
+  sharedCatalogCategory,
+} from './catalog-matching.js';
 import crypto from 'node:crypto';
 import { env } from '../config/env.js';
 import { redis } from '../infrastructure/redis.js';
@@ -187,9 +195,10 @@ function workflowRoute(profile, input, normalizedQuery) {
 function conversationRoute(profile, input) {
   if (input.routeHint !== 'conversation' && !input.flowKey && !input.nodeKey) return null;
   const flowKey = input.flowKey ?? 'main';
-  const candidates = profile.conversations.filter((item) => item.flow_key === flowKey
-    && (!input.nodeKey || item.node_key === input.nodeKey)
-    && (!item.language || item.language === input.language));
+  const flow = profile.conversations.filter((item) => item.flow_key === flowKey
+    && (!input.nodeKey || item.node_key === input.nodeKey));
+  const sameLanguage = flow.filter((item) => !item.language || item.language === input.language);
+  const candidates = sameLanguage.length ? sameLanguage : flow;
   const record = candidates.find((item) => input.nodeKey ? item.node_key === input.nodeKey : item.is_entry) ?? candidates[0];
   if (!record) return null;
   return {
@@ -200,10 +209,78 @@ function conversationRoute(profile, input) {
   };
 }
 
+function approvedConversationGuidance(profile) {
+  const nodes = (profile.conversations ?? []).map((item) => ({
+    flowKey: item.flow_key,
+    nodeKey: item.node_key,
+    sequenceOrder: item.sequence_order,
+    content: item.content,
+  }));
+  return nodes.length ? { nodes } : null;
+}
+
+function approvedWorkflowGuidance(profile) {
+  const rules = (profile.workflows ?? []).map((item) => ({
+    priority: item.priority,
+    condition: item.name,
+    instruction: item.response_template ?? item.action_config?.instruction ?? '',
+    actionType: item.action_type,
+  }));
+  return rules.length ? { rules } : null;
+}
+
 function catalogRoute(profile, input, normalizedQuery) {
-  if (input.routeHint !== 'catalog' && !catalogKeywords.test(normalizedQuery)) return null;
+  if (input.routeHint !== 'catalog' && !input.includeCatalogHierarchy
+    && !catalogKeywords.test(normalizedQuery)) return null;
+  if (input.includeCatalogHierarchy || catalogListQuestionPattern.test(input.query)) {
+    const items = profile.catalog_items.map((record) => ({
+      key: record.item_key, name: record.name, description: record.description,
+      price: record.price, currency: record.currency, attributes: record.attributes,
+      category: catalogCategory(record),
+    }));
+    return {
+      route: 'catalog', found: items.length > 0, list: true,
+      content: items.length ? `Available catalog items: ${items.map((item) => item.name).join(', ')}` : null,
+      source: null, items,
+    };
+  }
   const candidates = catalogLookup(profile.catalog_items, input.query, input.history);
-  if (candidates.length > 1) return { route: 'catalog', found: false, ambiguous: true, content: null, source: null };
+  if (!candidates.length) {
+    const categoryItems = catalogCategoryCandidates(profile.catalog_items, input.query);
+    if (categoryItems.length) {
+      const category = sharedCatalogCategory(categoryItems);
+      const items = categoryItems.map((record) => ({
+        key: record.item_key, name: record.name, description: record.description,
+        price: record.price, currency: record.currency, attributes: record.attributes,
+        category: catalogCategory(record),
+      }));
+      return {
+        route: 'catalog', found: true, candidates: true, category,
+        content: `${category?.name ?? 'Catalog category'}: ${items.map((item) => item.name).join(', ')}`,
+        source: null, items,
+      };
+    }
+  }
+  if (candidates.length > 1) {
+    const category = sharedCatalogCategory(candidates);
+    if (category) {
+      const items = candidates.map((record) => ({
+        key: record.item_key, name: record.name, description: record.description,
+        price: record.price, currency: record.currency, attributes: record.attributes,
+        category: catalogCategory(record),
+      }));
+      return {
+        route: 'catalog', found: true, candidates: true, category,
+        content: `${category.name}: ${items.map((item) => [
+          item.name,
+          item.price == null ? null : `${item.currency ?? ''} ${item.price}`.trim(),
+          item.description,
+        ].filter(Boolean).join(' - ')).join('\n')}`,
+        source: null, items,
+      };
+    }
+    return { route: 'catalog', found: false, ambiguous: true, content: null, source: null };
+  }
   const record = candidates[0];
   if (!record) return null;
   const price = record.price == null ? null : `${record.currency ?? ''} ${record.price}`.trim();
@@ -213,6 +290,7 @@ function catalogRoute(profile, input, normalizedQuery) {
     item: {
       key: record.item_key, name: record.name, description: record.description,
       price: record.price, currency: record.currency, attributes: record.attributes,
+      category: catalogCategory(record),
     },
   };
 }
@@ -235,28 +313,30 @@ async function semanticRoute(auth, profile, input, normalizedQuery, runtime) {
   const knowledgeBases = allowedSemanticKnowledgeBases(profile);
   if (!knowledgeBases.length || !env.RAG_ENABLED) return null;
   const fingerprint = knowledgeBases.map((item) => `${item.id}:${item.publicationRevision}`).join('|');
-  const cacheKey = `zea:rag:result:${auth.tenantId}:${input.agentId}:${input.usageDirection}:${hash(`${fingerprint}|${normalizedQuery}`)}`;
+  const cacheKey = `zea:rag:result:v2:${auth.tenantId}:${input.agentId}:${input.usageDirection}:${hash(`${fingerprint}|${normalizedQuery}`)}`;
   const cached = await cacheGet(runtime.cache, cacheKey);
   if (cached) return { ...cached, cacheHit: true };
+  const isCatalogQuery = catalogKeywords.test(normalizedQuery);
   const vector = await runtime.embed(input.query);
-  const rawMatches = await runtime.search(auth.tenantId, vector, {
+  const searchOptions = {
     knowledgeBases,
     usageDirection: input.usageDirection,
-    limit: input.topK ?? env.RAG_RUNTIME_TOP_K,
+    limit: isCatalogQuery ? 10 : (input.topK ?? env.RAG_RUNTIME_TOP_K),
     scoreThreshold: env.RAG_RUNTIME_MIN_SCORE,
-  });
+  };
+  const rawMatches = await runtime.search(auth.tenantId, vector, searchOptions);
   const allowed = new Map(knowledgeBases.map((item) => [item.id.toLowerCase(), item.publicationRevision]));
   const matches = rawMatches.filter((match) => {
     const payload = match.payload ?? {};
     return payload.tenant_id === auth.tenantId.toLowerCase()
       && allowed.get(String(payload.knowledge_base_id).toLowerCase()) === payload.publication_revision
       && [input.usageDirection.toUpperCase(), 'BOTH'].includes(payload.agent_usage)
-      && ['FAQ', 'KNOWLEDGE_CHUNK'].includes(payload.record_type);
+      && ['FAQ', 'CATALOG_ITEM', 'KNOWLEDGE_CHUNK'].includes(payload.record_type);
   }).map((match) => {
     const document = profile.documents?.find((item) => item.id === match.payload.document_id);
     const knowledgeBase = profile.knowledge_bases.find((item) => item.id === match.payload.knowledge_base_id);
     return ({
-    id: match.id,
+    id: match.payload.record_id ?? match.id,
     score: Number(match.score),
     content: match.payload.content,
     question: match.payload.question ?? null,
@@ -267,20 +347,57 @@ async function semanticRoute(auth, profile, input, normalizedQuery, runtime) {
     documentName: document?.displayName ?? document?.originalFilename ?? null,
     knowledgeBaseName: knowledgeBase?.name ?? null,
     pageNumber: match.payload.page_number ?? null,
+    itemKey: match.payload.item_key ?? null,
+    itemName: match.payload.item_name ?? null,
+    itemDescription: match.payload.item_description ?? null,
+    price: match.payload.price ?? null,
+    currency: match.payload.currency ?? null,
     });
   });
   if (!matches.length) return null;
+  const primary = matches[0];
+  if (isCatalogQuery && primary.recordType === 'CATALOG_ITEM') {
+    const records = matches.filter((match) => match.recordType === 'CATALOG_ITEM')
+      .map((match) => profile.catalog_items.find((item) => item.id === match.id))
+      .filter(Boolean);
+    if (records.length) {
+      const items = records.map((record) => ({
+        key: record.item_key, name: record.name, description: record.description,
+        price: record.price, currency: record.currency, attributes: record.attributes,
+        category: catalogCategory(record),
+      }));
+      const result = {
+        route: 'catalog', found: true, candidates: true,
+        content: items.map((item) => [
+          item.name,
+          item.price == null ? null : `${item.currency ?? ''} ${item.price}`.trim(),
+          item.description,
+        ].filter(Boolean).join(' - ')).join('\n'),
+        source: {
+          recordId: primary.id,
+          knowledgeBaseId: primary.knowledgeBaseId,
+          knowledgeBaseName: primary.knowledgeBaseName,
+          documentId: primary.documentId,
+          documentName: primary.documentName,
+          pageNumber: primary.pageNumber,
+        },
+        items, matches, cacheHit: false,
+      };
+      await cacheSet(runtime.cache, cacheKey, result, env.RAG_RUNTIME_RESULT_CACHE_TTL_SECONDS);
+      return result;
+    }
+  }
   const result = {
     route: 'semantic',
     found: true,
-    content: matches[0].answer ?? matches[0].content,
+    content: primary.answer ?? primary.content,
     source: {
-      recordId: matches[0].id,
-      knowledgeBaseId: matches[0].knowledgeBaseId,
-      knowledgeBaseName: matches[0].knowledgeBaseName,
-      documentId: matches[0].documentId,
-      documentName: matches[0].documentName,
-      pageNumber: matches[0].pageNumber,
+      recordId: primary.id,
+      knowledgeBaseId: primary.knowledgeBaseId,
+      knowledgeBaseName: primary.knowledgeBaseName,
+      documentId: primary.documentId,
+      documentName: primary.documentName,
+      pageNumber: primary.pageNumber,
     },
     matches,
     cacheHit: false,
@@ -315,6 +432,8 @@ export async function routeKnowledgeQuery(auth, input, dependencies = defaultDep
 
   return {
     ...(result ?? { route: 'none', found: false, content: null, source: null }),
+    conversationGuidance: approvedConversationGuidance(profile),
+    workflowGuidance: approvedWorkflowGuidance(profile),
     profileCacheHit: loaded.cacheHit,
     durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
   };
@@ -324,7 +443,11 @@ export async function invalidateTenantKnowledgeCache(tenantId, cache = redis) {
   if (!cache || (cache.status && cache.status !== 'ready')) return { deletedKeys: 0 };
   let cursor = '0';
   let deletedKeys = 0;
-  const patterns = [`zea:rag:profile:${tenantId}:*`, `zea:rag:result:${tenantId}:*`];
+  const patterns = [
+    `zea:rag:profile:${tenantId}:*`,
+    `zea:rag:result:${tenantId}:*`,
+    `zea:rag:result:v2:${tenantId}:*`,
+  ];
   try {
     for (const pattern of patterns) {
       cursor = '0';

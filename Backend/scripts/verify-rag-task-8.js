@@ -47,6 +47,7 @@ async function verifyQdrantSearchContract() {
       key: 'tenant_id', match: { value: tenantId },
     });
     assert.deepEqual(request.body.filter.must[1].match.any, ['OUTBOUND', 'BOTH']);
+    assert.deepEqual(request.body.filter.must[2].match.any, ['FAQ', 'CATALOG_ITEM', 'KNOWLEDGE_CHUNK']);
     assert.equal(request.body.filter.must[3].should.length, 2);
     assert.deepEqual(request.body.filter.must[3].should[0].must, [
       { key: 'knowledge_base_id', match: { value: knowledgeBases[0].id } },
@@ -99,7 +100,8 @@ async function createFixtures(client) {
     [`runtime-router-${suffix}`],
   )).rows[0].id;
   const organizationId = (await client.query(
-    `INSERT INTO organizations (tenant_id, name, status) VALUES ($1,'Runtime Router','active') RETURNING id`,
+    `INSERT INTO organizations (tenant_id, name, status, per_minute_price)
+     VALUES ($1,'Runtime Router','active',1) RETURNING id`,
     [tenantId],
   )).rows[0].id;
   const workspaceId = (await client.query(
@@ -194,7 +196,7 @@ async function createFixtures(client) {
      ) VALUES ($1,$2,'index','completed',100,'{"publicationRevision":1}'::jsonb,now())`,
     [tenantId, knowledgeBaseId],
   );
-  return tenant;
+  return { ...tenant, catalogItemId: itemId, catalogDocumentId: catalog.documentId };
 }
 
 async function verifyRuntimeRouter() {
@@ -214,6 +216,7 @@ async function verifyRuntimeRouter() {
     let embeddingCalls = 0;
     let searchCalls = 0;
     let receivedSearchOptions;
+    let returnSemanticCatalog = false;
     const dependencies = {
       contextRunner,
       cache,
@@ -224,6 +227,19 @@ async function verifyRuntimeRouter() {
       async search(_tenantId, _vector, options) {
         searchCalls += 1;
         receivedSearchOptions = options;
+        if (returnSemanticCatalog) {
+          return [{
+            id: fixture.catalogItemId, score: 0.93,
+            payload: {
+              tenant_id: fixture.tenantId, knowledge_base_id: fixture.knowledgeBaseId,
+              publication_revision: 1, agent_usage: 'BOTH', record_type: 'CATALOG_ITEM',
+              record_id: fixture.catalogItemId, document_id: fixture.catalogDocumentId,
+              item_key: 'silver_package', item_name: 'Silver Package',
+              item_description: 'Basic screening', price: 1650, currency: 'INR',
+              content: 'Catalog item: Silver Package Price: INR 1650',
+            },
+          }];
+        }
         return [
           {
             id: crypto.randomUUID(), score: 0.99,
@@ -255,12 +271,20 @@ async function verifyRuntimeRouter() {
     }, dependencies);
     assert.equal(workflow.route, 'workflow');
     assert.equal(workflow.action.type, 'transfer_call');
+    assert.equal(workflow.workflowGuidance.rules[0].actionType, 'transfer_call');
 
     const conversation = await routeKnowledgeQuery(auth, {
       ...base, query: 'start', routeHint: 'conversation', flowKey: 'main',
     }, dependencies);
     assert.equal(conversation.route, 'conversation');
     assert.equal(conversation.content, 'Welcome to the hospital.');
+    assert.equal(conversation.conversationGuidance.nodes.length, 1);
+
+    const tamilConversation = await routeKnowledgeQuery(auth, {
+      ...base, language: 'ta', query: 'start', routeHint: 'conversation', flowKey: 'main',
+    }, dependencies);
+    assert.equal(tamilConversation.route, 'conversation');
+    assert.equal(tamilConversation.content, 'Welcome to the hospital.');
 
     const catalog = await routeKnowledgeQuery(auth, {
       ...base, query: 'What is the Silver Package price?',
@@ -269,6 +293,7 @@ async function verifyRuntimeRouter() {
     assert.equal(catalog.item.price, 1650);
     assert.equal(catalog.item.currency, 'INR');
     assert.equal(catalog.item.attributes[0].key, 'fasting');
+    assert.equal(catalog.conversationGuidance.nodes[0].content, 'Welcome to the hospital.');
 
     const catalogAlias = await routeKnowledgeQuery(auth, {
       ...base, query: 'Silver price evlo?',
@@ -289,6 +314,21 @@ async function verifyRuntimeRouter() {
     assert.equal(platinumCatalog.route, 'catalog');
     assert.equal(platinumCatalog.item.name, 'Platinum Package');
     assert.equal(platinumCatalog.item.price, 7980);
+
+    const catalogList = await routeKnowledgeQuery(auth, {
+      ...base, query: 'What packages are available?',
+    }, dependencies);
+    assert.equal(catalogList.route, 'catalog');
+    assert.equal(catalogList.list, true);
+    assert.equal(catalogList.items.length, 3);
+    assert.equal(embeddingCalls, 0, 'Catalog lists must come directly from PostgreSQL');
+
+    const acknowledgementCatalog = await routeKnowledgeQuery(auth, {
+      ...base, query: 'yes', includeCatalogHierarchy: true,
+    }, dependencies);
+    assert.equal(acknowledgementCatalog.route, 'catalog');
+    assert.equal(acknowledgementCatalog.list, true);
+    assert.equal(acknowledgementCatalog.items.length, 3);
 
     const faq = await routeKnowledgeQuery(auth, {
       ...base, query: 'Where is the hospital?',
@@ -311,6 +351,19 @@ async function verifyRuntimeRouter() {
     assert.equal(cachedSemantic.cacheHit, true);
     assert.equal(embeddingCalls, 1);
     assert.equal(searchCalls, 1);
+
+    returnSemanticCatalog = true;
+    const multilingualCatalog = await routeKnowledgeQuery(auth, {
+      ...base, query: 'டயாபெட்டிக் பேக்கேஜ் விலை எவ்வளவு?',
+    }, dependencies);
+    assert.equal(multilingualCatalog.route, 'catalog');
+    assert.equal(multilingualCatalog.candidates, true);
+    assert.equal(multilingualCatalog.items[0].name, 'Silver Package');
+    assert.equal(multilingualCatalog.items[0].price, 1650);
+    assert.equal(embeddingCalls, 2);
+    assert.equal(searchCalls, 2);
+    assert.equal(receivedSearchOptions.recordTypes, undefined,
+      'Mixed package queries must keep FAQ and safety evidence eligible');
 
     await assert.rejects(
       routeKnowledgeQuery(auth, { ...base, usageDirection: 'inbound', query: 'hello' }, {
